@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# Virtual environment
+.venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Playwright browser session (contains auth cookies)
+.slack-session/
+
+# Output files
+*.md
+!README.md
+
+# Environment / secrets
+.env
