@@ -108,7 +108,7 @@ def _build_provider_from_args(args) -> AIProvider:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="slack-search",
-        description="Search Slack messages for topic-related content and generate markdown reports.",
+        description="Extract knowledge from Slack conversations and generate organized KB articles.",
     )
 
     # Slack session (Playwright-based)
@@ -176,12 +176,12 @@ def parse_args(argv=None):
     parser.add_argument(
         "--topic",
         default=None,
-        help='Topic to search for (e.g. "injury", "outage", "hiring").',
+        help='Topic to extract knowledge about (e.g. "AML", "onboarding", "deployment").',
     )
     parser.add_argument(
         "--output",
-        default="report.md",
-        help='Output markdown file path (default: "report.md").',
+        default="kb",
+        help='Output directory for KB articles (default: "kb").',
     )
     parser.add_argument(
         "--scroll-delay",

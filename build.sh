@@ -19,7 +19,7 @@ echo "Installing Playwright browsers..."
 playwright install chromium
 
 echo "Building standalone binary..."
-pyinstaller --onefile slack_injury_search.py \
+pyinstaller --onefile slack_search.py \
   --name slack-search \
   --hidden-import anthropic \
   --hidden-import config \

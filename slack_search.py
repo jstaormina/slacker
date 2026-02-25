@@ -1,4 +1,4 @@
-"""Main CLI entry point for Slack Topic Search."""
+"""Main CLI entry point for Slack Knowledge Base Extractor."""
 
 import sys
 from datetime import datetime, timezone
@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 from config import setup
 from scrape_slack import do_login, open_browser, scrape_channel
 from ai_analyzer import AIAnalyzer
-from report_generator import ReportGenerator
+from report_generator import KBReportGenerator
 
-# Messages within this many hours of each other are grouped into one incident.
+# Messages within this many hours of each other are grouped into one cluster.
 CLUSTER_GAP_HOURS = 4
 
-# Number of surrounding messages to include as context for each incident.
+# Number of surrounding messages to include as context for each cluster.
 CONTEXT_WINDOW = 15
 
 
@@ -93,47 +93,47 @@ def gather_context(cluster: list[dict], all_messages: list[dict], window: int = 
 
 
 def dedup_by_context_overlap(
-    incidents: list[dict], overlap_threshold: float = 0.5
+    clusters: list[dict], overlap_threshold: float = 0.5
 ) -> list[dict]:
-    """Merge incidents whose context messages overlap by more than the threshold."""
-    if len(incidents) <= 1:
-        return incidents
+    """Merge clusters whose context messages overlap by more than the threshold."""
+    if len(clusters) <= 1:
+        return clusters
 
-    incidents.sort(key=lambda x: x["date"])
+    clusters.sort(key=lambda x: x["date"])
 
     merged = True
     while merged:
         merged = False
-        new_incidents = []
+        new_clusters = []
         skip = set()
 
-        for i, inc_a in enumerate(incidents):
+        for i, cl_a in enumerate(clusters):
             if i in skip:
                 continue
-            ts_a = inc_a["context_ts_set"]
+            ts_a = cl_a["context_ts_set"]
 
-            for j in range(i + 1, len(incidents)):
+            for j in range(i + 1, len(clusters)):
                 if j in skip:
                     continue
-                ts_b = incidents[j]["context_ts_set"]
+                ts_b = clusters[j]["context_ts_set"]
 
                 intersection = ts_a & ts_b
                 smaller = min(len(ts_a), len(ts_b))
                 if smaller > 0 and len(intersection) / smaller >= overlap_threshold:
                     ts_a = ts_a | ts_b
-                    inc_a["context_ts_set"] = ts_a
-                    inc_a["context_messages"] = sorted(
-                        {m["ts"]: m for m in inc_a["context_messages"] + incidents[j]["context_messages"]}.values(),
+                    cl_a["context_ts_set"] = ts_a
+                    cl_a["context_messages"] = sorted(
+                        {m["ts"]: m for m in cl_a["context_messages"] + clusters[j]["context_messages"]}.values(),
                         key=lambda m: float(m.get("ts", 0)),
                     )
-                    inc_a["participants"] = inc_a["participants"] | incidents[j]["participants"]
+                    cl_a["participants"] = cl_a["participants"] | clusters[j]["participants"]
                     skip.add(j)
                     merged = True
 
-            new_incidents.append(inc_a)
-        incidents = new_incidents
+            new_clusters.append(cl_a)
+        clusters = new_clusters
 
-    return incidents
+    return clusters
 
 
 def channel_name_from_url(url: str) -> str:
@@ -151,7 +151,7 @@ def main():
         do_login(args.workspace, args.session_dir)
         return
 
-    print(f"\nSlack Topic Search")
+    print(f"\nSlack Knowledge Base Extractor")
     print(f"  Topic: {args.topic}")
     print(f"  Channels: {len(args.url_list)} URL(s)")
     print(f"  Output: {args.output}")
@@ -159,10 +159,10 @@ def main():
     print()
 
     analyzer = AIAnalyzer(provider)
-    report = ReportGenerator(args.topic, [channel_name_from_url(u) for u in args.url_list], days=0)
+    report = KBReportGenerator(args.topic, [channel_name_from_url(u) for u in args.url_list])
 
     # Step 1: Scrape all channels
-    print("[1/4] Scraping channel messages via Playwright...")
+    print("[1/6] Scraping channel messages via Playwright...")
     pw, browser, page = open_browser(args.session_dir, headless=True)
 
     all_channel_data: dict[str, list[dict]] = {}  # url -> converted messages
@@ -184,11 +184,11 @@ def main():
     if total_messages == 0:
         print("  No messages found in any channel.")
         report.write(args.output)
-        print(f"\nEmpty report written to {args.output}")
+        print(f"\nEmpty KB written to {args.output}/")
         return
 
     # Step 2: Classify messages with AI
-    print(f"\n[2/4] Analyzing {total_messages} messages for \"{args.topic}\" content...")
+    print(f'\n[2/6] Analyzing {total_messages} messages for "{args.topic}" knowledge...')
     relevant_by_channel: dict[str, list[dict]] = {}
 
     for url, messages in all_channel_data.items():
@@ -206,34 +206,33 @@ def main():
 
     total_relevant = sum(len(v) for v in relevant_by_channel.values())
     if total_relevant == 0:
-        print(f"\n  No messages related to \"{args.topic}\" found.")
+        print(f'\n  No knowledge related to "{args.topic}" found.')
         report.write(args.output)
-        print(f"\nEmpty report written to {args.output}")
+        print(f"\nEmpty KB written to {args.output}/")
         return
 
-    # Step 3: Cluster, gather context, dedup, and summarize
+    # Steps 3-4: Cluster, gather context, dedup, extract knowledge
+    all_extractions: list[dict] = []
+
     for url, relevant_msgs in relevant_by_channel.items():
         label = channel_name_from_url(url)
         all_messages = all_channel_data[url]
         clusters = cluster_messages(relevant_msgs)
-        print(f"\n[3/4] {label}: {len(relevant_msgs)} relevant msgs -> {len(clusters)} cluster(s). Gathering context...")
+        print(f"\n[3/6] {label}: {len(relevant_msgs)} relevant msgs -> {len(clusters)} cluster(s)")
 
-        raw_incidents: list[dict] = []
+        raw_clusters: list[dict] = []
 
         for cluster_idx, cluster in enumerate(clusters):
             first_ts = cluster[0].get("ts")
             print(f"  cluster {cluster_idx + 1}/{len(clusters)} ({len(cluster)} msgs)...", end=" ", flush=True)
 
-            # Gather surrounding context from the full scraped message list
             context_messages = gather_context(cluster, all_messages)
             context_ts_set = {m["ts"] for m in context_messages}
-
-            # Collect participant names (already display names from scraper)
             participants = {m.get("user") for m in context_messages if m.get("user")}
 
             print(f"{len(context_messages)} context msgs")
 
-            raw_incidents.append({
+            raw_clusters.append({
                 "cluster": cluster,
                 "context_messages": context_messages,
                 "context_ts_set": context_ts_set,
@@ -244,37 +243,78 @@ def main():
                 "channel_url": url,
             })
 
-        # Dedup incidents with overlapping context
-        deduped = dedup_by_context_overlap(raw_incidents, overlap_threshold=0.4)
-        print(f"  After dedup: {len(deduped)} unique incident(s)")
+        deduped = dedup_by_context_overlap(raw_clusters, overlap_threshold=0.4)
+        print(f"  After dedup: {len(deduped)} unique cluster(s)")
 
-        # Summarize each incident
-        for inc_idx, inc in enumerate(deduped):
-            print(f"  Summarizing {inc_idx + 1}/{len(deduped)}...", end=" ", flush=True)
+        # Extract knowledge from each cluster
+        print(f"\n[4/6] Extracting knowledge from {len(deduped)} cluster(s)...")
+        for ext_idx, cluster_data in enumerate(deduped):
+            print(f"  Extracting {ext_idx + 1}/{len(deduped)}...", end=" ", flush=True)
 
-            # Build pass-through user_names dict (user field is already the display name)
-            user_names = {name: name for name in inc["participants"]}
+            user_names = {name: name for name in cluster_data["participants"]}
 
-            summary = analyzer.summarize_incident(
-                inc["context_messages"], inc["channel_name"], user_names, args.topic
+            extraction = analyzer.extract_knowledge(
+                cluster_data["context_messages"],
+                cluster_data["channel_name"],
+                user_names,
+                args.topic,
             )
-            print(f"'{summary.get('title', 'untitled')}'")
+            print(f"'{extraction.get('title', 'untitled')}'")
 
-            report.add_incident(
-                summary=summary,
-                channel_name=inc["channel_name"],
-                date=inc["date"],
-                participants=sorted(inc["participants"]),
-                thread_messages=inc["context_messages"],
-                user_names=user_names,
-                permalink=inc["channel_url"],
-            )
+            # Attach source metadata for report generation
+            extraction["_source_channel"] = cluster_data["channel_name"]
+            extraction["_source_date"] = cluster_data["date"]
+            extraction["_source_contributors"] = sorted(cluster_data["participants"])
 
-    # Step 4: Generate report
-    print(f"\n[4/4] Generating report...")
-    output_path = report.write(args.output)
-    print(f"\nDone! Report written to {output_path}")
-    print(f"  {len(report.incidents)} incident(s) documented")
+            all_extractions.append(extraction)
+
+    if not all_extractions:
+        print("  No knowledge extracted.")
+        report.write(args.output)
+        print(f"\nEmpty KB written to {args.output}/")
+        return
+
+    # Step 5: Group extractions by topic
+    print(f"\n[5/6] Grouping {len(all_extractions)} extraction(s) by topic...")
+    groups = analyzer.group_topics(all_extractions)
+    print(f"  {len(groups)} topic group(s) identified")
+
+    # Step 6: Synthesize articles per group
+    print(f"\n[6/6] Synthesizing {len(groups)} KB article(s)...")
+    for grp_idx, group in enumerate(groups):
+        group_title = group.get("group_title", "Untitled")
+        indices = group.get("indices", [])
+        group_extractions = [all_extractions[i] for i in indices if i < len(all_extractions)]
+
+        if not group_extractions:
+            continue
+
+        print(f"  Article {grp_idx + 1}/{len(groups)}: '{group_title}'...", end=" ", flush=True)
+
+        article = analyzer.synthesize_article(group_title, group_extractions, args.topic)
+        print("done")
+
+        # Collect source metadata from all extractions in the group
+        source_channels = [ext.get("_source_channel", "") for ext in group_extractions]
+        source_dates = [ext.get("_source_date", "") for ext in group_extractions]
+        contributors = []
+        for ext in group_extractions:
+            contributors.extend(ext.get("_source_contributors", []))
+
+        report.add_article(
+            title=article.get("title", group_title),
+            category=article.get("category", "FAQ"),
+            content=article.get("content", ""),
+            source_channels=source_channels,
+            source_dates=source_dates,
+            contributors=contributors,
+        )
+
+    # Generate report
+    output_dir = report.write(args.output)
+    print(f"\nDone! Knowledge base written to {output_dir}/")
+    print(f"  {len(report.articles)} article(s) generated")
+    print(f"  Index: {output_dir}/index.md")
 
 
 if __name__ == "__main__":

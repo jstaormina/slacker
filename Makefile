@@ -4,7 +4,7 @@ BIN := dist/slack-search
 .PHONY: build install clean
 
 build: install
-	$(VENV)/bin/pyinstaller --onefile slack_injury_search.py \
+	$(VENV)/bin/pyinstaller --onefile slack_search.py \
 		--name slack-search \
 		--hidden-import anthropic \
 		--hidden-import config \

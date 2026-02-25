@@ -1,126 +1,152 @@
-"""Markdown report generator for topic search results."""
+"""Markdown report generator for knowledge base articles."""
 
+import os
+import re
 from datetime import datetime, timezone
 
 
-class ReportGenerator:
-    def __init__(self, topic: str, channel_names: list[str], days: int):
+CATEGORY_ORDER = [
+    "Troubleshooting",
+    "How-To",
+    "FAQ",
+    "Feature Explanation",
+    "Configuration",
+    "Best Practice",
+]
+
+
+def _slugify(text: str) -> str:
+    """Convert a title to a filename-safe slug."""
+    slug = text.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "untitled"
+
+
+class KBReportGenerator:
+    def __init__(self, topic: str, channel_names: list[str]):
         self.topic = topic
         self.channel_names = channel_names
-        self.days = days
-        self.incidents: list[dict] = []
+        self.articles: list[dict] = []
 
-    def add_incident(
+    def add_article(
         self,
-        summary: dict,
-        channel_name: str,
-        date: str,
-        participants: list[str],
-        thread_messages: list[dict],
-        user_names: dict[str, str],
-        permalink: str | None = None,
+        title: str,
+        category: str,
+        content: str,
+        source_channels: list[str],
+        source_dates: list[str],
+        contributors: list[str],
     ):
-        """Add an incident to the report.
+        """Add a synthesized KB article to the report."""
+        self.articles.append({
+            "title": title,
+            "category": category,
+            "content": content,
+            "source_channels": source_channels,
+            "source_dates": source_dates,
+            "contributors": contributors,
+        })
 
-        summary: dict from AIAnalyzer.summarize_incident (title, summary, key_quotes, severity)
-        """
-        self.incidents.append(
-            {
-                "summary": summary,
-                "channel_name": channel_name,
-                "date": date,
-                "participants": participants,
-                "thread_messages": thread_messages,
-                "user_names": user_names,
-                "permalink": permalink,
-            }
-        )
-
-    def generate(self) -> str:
-        """Generate the full markdown report."""
+    def _generate_index(self) -> str:
+        """Generate the index/README markdown file."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         channels_str = ", ".join(f"#{c}" for c in self.channel_names)
 
         lines = [
-            f"# {self.topic.title()}-Related Incidents Report",
+            f"# {self.topic} Knowledge Base",
             "",
             f"**Generated:** {now}",
-            f"**Channels:** {channels_str}",
-            f"**Search Period:** Last {self.days} days",
-            f"**Topic:** {self.topic}",
+            f"**Source Channels:** {channels_str}",
+            f"**Articles:** {len(self.articles)}",
             "",
             "---",
             "",
-            "## Summary",
-            "",
-            f"- **{len(self.incidents)} incident(s)** found across {len(self.channel_names)} channel(s)",
         ]
 
-        if self.incidents:
-            severity_counts = {}
-            for inc in self.incidents:
-                sev = inc["summary"].get("severity", "informational")
-                severity_counts[sev] = severity_counts.get(sev, 0) + 1
-            for sev, count in sorted(severity_counts.items()):
-                lines.append(f"- {sev.title()}: {count}")
-
-        lines.extend(["", "---", ""])
-
-        if not self.incidents:
-            lines.append(f"*No incidents related to \"{self.topic}\" were found in the searched channels.*")
+        if not self.articles:
+            lines.append(
+                f'*No knowledge articles related to "{self.topic}" '
+                f"were found in the searched channels.*"
+            )
             return "\n".join(lines)
 
-        # Sort incidents by date (newest first)
-        self.incidents.sort(key=lambda x: x["date"], reverse=True)
+        # Group articles by category
+        by_category: dict[str, list[dict]] = {}
+        for article in self.articles:
+            cat = article["category"]
+            by_category.setdefault(cat, []).append(article)
 
-        for idx, inc in enumerate(self.incidents, 1):
-            summary = inc["summary"]
-            title = summary.get("title", "Untitled Incident")
-            severity = summary.get("severity", "informational")
+        ordered_cats = [c for c in CATEGORY_ORDER if c in by_category]
+        ordered_cats += sorted(c for c in by_category if c not in CATEGORY_ORDER)
 
-            lines.extend([
-                f"## Incident {idx}: {title}",
-                "",
-                f"- **Date:** {inc['date']}",
-                f"- **Channel:** #{inc['channel_name']}",
-                f"- **Severity:** {severity.title()}",
-                f"- **Participants:** {', '.join(f'@{p}' for p in inc['participants'])}",
-            ])
-
-            if inc.get("permalink"):
-                lines.append(f"- **Link:** {inc['permalink']}")
-
-            lines.extend(["", "### Summary", "", summary.get("summary", "No summary available."), ""])
-
-            key_quotes = summary.get("key_quotes", [])
-            if key_quotes:
-                lines.append("### Key Messages")
-                lines.append("")
-                for quote in key_quotes:
-                    lines.append(f"> {quote}")
-                    lines.append("")
-
-            # Include full thread context
-            if inc["thread_messages"]:
-                lines.append("### Full Thread Context")
-                lines.append("")
-                for msg in inc["thread_messages"]:
-                    ts = float(msg.get("ts", 0))
-                    dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-                    user = inc["user_names"].get(msg.get("user", ""), msg.get("user", "unknown"))
-                    text = msg.get("text", "").replace("\n", "\n> ")
-                    lines.append(f"> **@{user}** ({dt}):")
-                    lines.append(f"> {text}")
-                    lines.append(">")
-                lines.append("")
-
-            lines.extend(["---", ""])
+        for cat in ordered_cats:
+            lines.append(f"## {cat}")
+            lines.append("")
+            for article in by_category[cat]:
+                slug = _slugify(article["title"])
+                lines.append(f"- [{article['title']}]({slug}.md)")
+            lines.append("")
 
         return "\n".join(lines)
 
-    def write(self, output_path: str):
-        """Generate and write the report to a file."""
-        content = self.generate()
-        with open(output_path, "w") as f:
-            f.write(content)
-        return output_path
+    def _generate_article(self, article: dict) -> str:
+        """Generate a single article markdown file."""
+        lines = [
+            f"# {article['title']}",
+            "",
+            f"**Category:** {article['category']}",
+            "",
+            "---",
+            "",
+            article["content"],
+            "",
+            "---",
+            "",
+            "**Sources:**",
+        ]
+
+        if article["source_dates"]:
+            date_range = sorted(set(article["source_dates"]))
+            lines.append(f"- **Dates:** {', '.join(date_range)}")
+        if article["source_channels"]:
+            ch_str = ", ".join(
+                f"#{c}" for c in sorted(set(article["source_channels"]))
+            )
+            lines.append(f"- **Channels:** {ch_str}")
+        if article["contributors"]:
+            contrib_str = ", ".join(
+                f"@{c}" for c in sorted(set(article["contributors"]))
+            )
+            lines.append(f"- **Contributors:** {contrib_str}")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def write(self, output_dir: str) -> str:
+        """Write the KB as a directory with an index and individual article files."""
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Write index
+        index_path = os.path.join(output_dir, "index.md")
+        with open(index_path, "w") as f:
+            f.write(self._generate_index())
+
+        # Write individual articles
+        used_slugs: set[str] = set()
+        for article in self.articles:
+            slug = _slugify(article["title"])
+            # Ensure unique filenames
+            if slug in used_slugs:
+                counter = 2
+                while f"{slug}-{counter}" in used_slugs:
+                    counter += 1
+                slug = f"{slug}-{counter}"
+            used_slugs.add(slug)
+
+            article_path = os.path.join(output_dir, f"{slug}.md")
+            with open(article_path, "w") as f:
+                f.write(self._generate_article(article))
+
+        return output_dir

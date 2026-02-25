@@ -16,8 +16,7 @@ dist/
 .slack-session/
 
 # Output files
-*.md
-!README.md
+kb/
 
 # Environment / secrets
 .env
