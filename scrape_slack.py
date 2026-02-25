@@ -17,6 +17,14 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# When running from a PyInstaller bundle, Playwright can't find its Chromium
+# browser in the temp extraction directory. Point it to the system cache.
+if getattr(sys, '_MEIPASS', None):
+    if 'PLAYWRIGHT_BROWSERS_PATH' not in os.environ:
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.expanduser(
+            '~/.cache/ms-playwright'
+        )
+
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 
@@ -413,9 +421,47 @@ def write_markdown(messages: list[dict], output_path: str, channel_url: str):
     print(f"  {len(messages)} messages")
 
 
-def do_scrape(channel_url: str, output_path: str, session_dir: str,
-              scroll_delay: float, max_scrolls: int, headless: bool):
-    """Load saved session, scroll to top extracting messages, write markdown."""
+def scrape_channel(page, channel_url: str, scroll_delay: float = 3.0,
+                   max_scrolls: int = 0) -> list[dict]:
+    """Scrape all messages from a Slack channel. Returns sorted list of message dicts.
+
+    This is the reusable core — call it from other scripts with an already-open
+    Playwright page that has a valid Slack session loaded.
+
+    Each returned dict has: sender, timestamp, ts_value, text, key, day_divider.
+    """
+    print(f"Navigating to {channel_url}")
+    page.goto(channel_url, wait_until="domcontentloaded", timeout=60000)
+
+    print("Waiting for messages to load...")
+    try:
+        page.wait_for_selector(
+            '.c-message_kit__message, [data-qa="virtual-list-item"]',
+            timeout=30000,
+        )
+    except PlaywrightTimeout:
+        print("  Warning: No messages detected after 30s, continuing anyway...")
+
+    time.sleep(3)
+
+    messages_by_key: dict[str, dict] = {}
+
+    print("\n  [1/2] Scrolling to top and extracting messages...")
+    scroll_up_and_extract(page, scroll_delay, max_scrolls, messages_by_key)
+
+    print("\n  [2/2] Scrolling back down to fill gaps...")
+    scroll_down_and_extract(page, messages_by_key)
+
+    messages = list(messages_by_key.values())
+    messages.sort(key=lambda m: float(m.get("ts_value") or "0") or 0)
+    return messages
+
+
+def open_browser(session_dir: str, headless: bool = True):
+    """Open a Playwright browser with a saved Slack session. Returns (playwright, browser, page).
+
+    Caller is responsible for closing the browser when done.
+    """
     session_path = os.path.abspath(session_dir)
 
     if not os.path.exists(session_path):
@@ -425,51 +471,34 @@ def do_scrape(channel_url: str, output_path: str, session_dir: str,
 
     print(f"Loading saved session from {session_path}")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            session_path,
-            headless=headless,
-            viewport={"width": 1280, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch_persistent_context(
+        session_path,
+        headless=headless,
+        viewport={"width": 1280, "height": 900},
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    page = browser.pages[0] if browser.pages else browser.new_page()
+    return pw, browser, page
 
-        page = browser.pages[0] if browser.pages else browser.new_page()
 
-        print(f"Navigating to {channel_url}")
-        page.goto(channel_url, wait_until="domcontentloaded", timeout=60000)
+def do_scrape(channel_url: str, output_path: str, session_dir: str,
+              scroll_delay: float, max_scrolls: int, headless: bool):
+    """Load saved session, scroll to top extracting messages, write markdown."""
+    pw, browser, page = open_browser(session_dir, headless)
 
-        # Wait for messages to appear
-        print("Waiting for messages to load...")
-        try:
-            page.wait_for_selector(
-                '.c-message_kit__message, [data-qa="virtual-list-item"]',
-                timeout=30000,
-            )
-        except PlaywrightTimeout:
-            print("  Warning: No messages detected after 30s, continuing anyway...")
-
-        time.sleep(3)
-
-        messages_by_key: dict[str, dict] = {}
-
-        print("\n[1/3] Scrolling to top and extracting messages...")
-        scroll_up_and_extract(page, scroll_delay, max_scrolls, messages_by_key)
-
-        print("\n[2/3] Scrolling back down to fill gaps...")
-        scroll_down_and_extract(page, messages_by_key)
-
+    try:
+        messages = scrape_channel(page, channel_url, scroll_delay, max_scrolls)
+    finally:
         browser.close()
-
-    # Sort by ts_value (unix timestamp) when available
-    messages = list(messages_by_key.values())
-    messages.sort(key=lambda m: float(m.get("ts_value") or "0") or 0)
+        pw.stop()
 
     if not messages:
         print("\nNo messages were extracted. The page might not have loaded correctly.")
         print("Try running --login again to refresh your session.")
         sys.exit(1)
 
-    print("\n[3/3] Writing markdown...")
+    print("\nWriting markdown...")
     write_markdown(messages, output_path, channel_url)
 
 

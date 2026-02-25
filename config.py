@@ -111,11 +111,21 @@ def parse_args(argv=None):
         description="Search Slack messages for topic-related content and generate markdown reports.",
     )
 
-    # Slack auth
+    # Slack session (Playwright-based)
     parser.add_argument(
-        "--slack-token",
-        default=os.environ.get("SLACK_TOKEN"),
-        help="Slack User OAuth Token (xoxp-...). Also reads SLACK_TOKEN env var.",
+        "--login",
+        action="store_true",
+        help="Open a browser to log in to Slack and save session. Run this first.",
+    )
+    parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Slack workspace URL for login (e.g. https://app.slack.com/client/TGG6BJ82E).",
+    )
+    parser.add_argument(
+        "--session-dir",
+        default=".slack-session",
+        help="Directory for saved browser session (default: .slack-session).",
     )
 
     # AI provider selection
@@ -158,13 +168,14 @@ def parse_args(argv=None):
 
     # Search parameters
     parser.add_argument(
-        "--channels",
-        required=True,
-        help="Comma-separated list of channel names to search (e.g. general,safety,operations).",
+        "--urls",
+        default=None,
+        help="Comma-separated Slack channel URLs to search "
+             "(e.g. https://app.slack.com/client/TGG6BJ82E/CGG6BJN5Q).",
     )
     parser.add_argument(
         "--topic",
-        required=True,
+        default=None,
         help='Topic to search for (e.g. "injury", "outage", "hiring").',
     )
     parser.add_argument(
@@ -173,29 +184,42 @@ def parse_args(argv=None):
         help='Output markdown file path (default: "report.md").',
     )
     parser.add_argument(
-        "--days",
-        type=int,
-        default=90,
-        help="Number of days back to search (default: 90).",
+        "--scroll-delay",
+        type=float,
+        default=3.0,
+        help="Seconds between scroll steps when scraping (default: 3.0).",
     )
 
     args = parser.parse_args(argv)
 
-    # Slack token: prompt if missing
-    if not args.slack_token:
-        args.slack_token = getpass.getpass("Enter your Slack User OAuth Token (xoxp-...): ").strip()
-    if not args.slack_token:
-        parser.error("Slack token is required (--slack-token or SLACK_TOKEN env var)")
+    # Login mode only needs --workspace
+    if args.login:
+        if not args.workspace:
+            parser.error("--workspace is required with --login")
+        return args
 
-    args.channel_list = [c.strip().lstrip("#") for c in args.channels.split(",") if c.strip()]
-    if not args.channel_list:
-        parser.error("At least one channel name is required")
+    # Search mode requires --urls and --topic
+    if not args.urls:
+        parser.error("--urls is required (or use --login to set up your session first)")
+    if not args.topic:
+        parser.error("--topic is required")
+
+    args.url_list = [u.strip() for u in args.urls.split(",") if u.strip()]
+    if not args.url_list:
+        parser.error("At least one channel URL is required")
 
     return args
 
 
 def setup(argv=None):
-    """Parse args and set up the AI provider. Returns (args, provider)."""
+    """Parse args and set up the AI provider. Returns (args, provider).
+
+    If --login is set, returns (args, None) — caller should handle login flow.
+    """
     args = parse_args(argv)
+
+    if args.login:
+        return args, None
+
     provider = _setup_provider(args)
     return args, provider
