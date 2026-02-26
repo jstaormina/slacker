@@ -27,7 +27,7 @@ pyinstaller --onefile slack_search.py \
   --hidden-import ai_analyzer \
   --hidden-import report_generator \
   --hidden-import markdown \
-  --hidden-import xhtml2pdf
+  --hidden-import fpdf
 
 echo ""
 echo "Build complete! Binary is at: dist/slack-search"

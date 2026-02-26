@@ -12,7 +12,7 @@ build: install
 		--hidden-import ai_analyzer \
 		--hidden-import report_generator \
 		--hidden-import markdown \
-		--hidden-import xhtml2pdf
+		--hidden-import fpdf
 	@echo "\nBuild complete: $(BIN)"
 
 install: $(VENV)/bin/activate

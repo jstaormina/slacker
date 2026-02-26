@@ -1,12 +1,11 @@
 """Report generator for knowledge base articles in Markdown, HTML, and PDF."""
 
-import io
 import os
 import re
 from datetime import datetime, timezone
 
 import markdown
-from xhtml2pdf import pisa
+from fpdf import FPDF
 
 
 CATEGORY_ORDER = [
@@ -221,12 +220,17 @@ class KBReportGenerator:
     def _write_pdf(self, output_dir: str) -> str:
         """Write the KB as a single PDF file."""
         os.makedirs(output_dir, exist_ok=True)
-        html_content = self._render_html()
+        md_text = self._generate_combined_md()
+        body_html = markdown.markdown(
+            md_text,
+            extensions=["fenced_code", "tables"],
+        )
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.write_html(body_html)
         out_path = os.path.join(output_dir, "knowledge-base.pdf")
-        with open(out_path, "wb") as pdf_file:
-            result = pisa.CreatePDF(io.BytesIO(html_content.encode("utf-8")), dest=pdf_file)
-        if result.err:
-            print(f"  Warning: PDF generation encountered {result.err} error(s)")
+        pdf.output(out_path)
         return out_path
 
     def write(self, output_dir: str, fmt: str = "pdf") -> str:

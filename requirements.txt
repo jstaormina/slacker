@@ -2,4 +2,4 @@ anthropic
 pyinstaller
 playwright
 markdown
-xhtml2pdf
+fpdf2
