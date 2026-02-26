@@ -184,6 +184,12 @@ def parse_args(argv=None):
         help='Output directory for KB articles (default: "kb").',
     )
     parser.add_argument(
+        "--format",
+        choices=["pdf", "html", "md"],
+        default="pdf",
+        help="Output format: pdf, html, or md (default: pdf).",
+    )
+    parser.add_argument(
         "--scroll-delay",
         type=float,
         default=3.0,

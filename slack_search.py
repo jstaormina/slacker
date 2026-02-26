@@ -154,7 +154,7 @@ def main():
     print(f"\nSlack Knowledge Base Extractor")
     print(f"  Topic: {args.topic}")
     print(f"  Channels: {len(args.url_list)} URL(s)")
-    print(f"  Output: {args.output}")
+    print(f"  Output: {args.output} ({args.format})")
     print(f"  AI Provider: {provider.name}")
     print()
 
@@ -183,7 +183,7 @@ def main():
 
     if total_messages == 0:
         print("  No messages found in any channel.")
-        report.write(args.output)
+        report.write(args.output, args.format)
         print(f"\nEmpty KB written to {args.output}/")
         return
 
@@ -207,7 +207,7 @@ def main():
     total_relevant = sum(len(v) for v in relevant_by_channel.values())
     if total_relevant == 0:
         print(f'\n  No knowledge related to "{args.topic}" found.')
-        report.write(args.output)
+        report.write(args.output, args.format)
         print(f"\nEmpty KB written to {args.output}/")
         return
 
@@ -270,7 +270,7 @@ def main():
 
     if not all_extractions:
         print("  No knowledge extracted.")
-        report.write(args.output)
+        report.write(args.output, args.format)
         print(f"\nEmpty KB written to {args.output}/")
         return
 
@@ -311,10 +311,9 @@ def main():
         )
 
     # Generate report
-    output_dir = report.write(args.output)
-    print(f"\nDone! Knowledge base written to {output_dir}/")
+    output_path = report.write(args.output, args.format)
+    print(f"\nDone! Knowledge base written to {output_path}")
     print(f"  {len(report.articles)} article(s) generated")
-    print(f"  Index: {output_dir}/index.md")
 
 
 if __name__ == "__main__":

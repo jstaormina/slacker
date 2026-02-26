@@ -10,7 +10,9 @@ build: install
 		--hidden-import config \
 		--hidden-import scrape_slack \
 		--hidden-import ai_analyzer \
-		--hidden-import report_generator
+		--hidden-import report_generator \
+		--hidden-import markdown \
+		--hidden-import xhtml2pdf
 	@echo "\nBuild complete: $(BIN)"
 
 install: $(VENV)/bin/activate
