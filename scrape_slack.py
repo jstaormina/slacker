@@ -21,9 +21,11 @@ from datetime import datetime, timezone
 # browser in the temp extraction directory. Point it to the system cache.
 if getattr(sys, '_MEIPASS', None):
     if 'PLAYWRIGHT_BROWSERS_PATH' not in os.environ:
-        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.expanduser(
-            '~/.cache/ms-playwright'
-        )
+        if sys.platform == 'darwin':
+            cache_path = os.path.expanduser('~/Library/Caches/ms-playwright')
+        else:
+            cache_path = os.path.expanduser('~/.cache/ms-playwright')
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = cache_path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 

@@ -48,6 +48,28 @@ HTML_TEMPLATE = """\
 """
 
 
+def _sanitize_for_pdf(text: str) -> str:
+    """Replace common Unicode characters that Latin-1 PDF fonts can't encode."""
+    replacements = {
+        "\u2014": "--",   # em dash
+        "\u2013": "-",    # en dash
+        "\u2018": "'",    # left single quote
+        "\u2019": "'",    # right single quote / apostrophe
+        "\u201c": '"',    # left double quote
+        "\u201d": '"',    # right double quote
+        "\u2026": "...",  # ellipsis
+        "\u2022": "*",    # bullet
+        "\u00a0": " ",    # non-breaking space
+        "\u2011": "-",    # non-breaking hyphen
+        "\u2010": "-",    # hyphen
+        "\u00b7": "*",    # middle dot
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    # Drop anything else outside Latin-1
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _slugify(text: str) -> str:
     """Convert a title to a filename-safe slug."""
     slug = text.lower().strip()
@@ -225,6 +247,7 @@ class KBReportGenerator:
             md_text,
             extensions=["fenced_code", "tables"],
         )
+        body_html = _sanitize_for_pdf(body_html)
         pdf = FPDF()
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=15)

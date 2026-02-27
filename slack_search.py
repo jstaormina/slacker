@@ -1,5 +1,7 @@
 """Main CLI entry point for Slack Knowledge Base Extractor."""
 
+import json
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -13,6 +15,31 @@ CLUSTER_GAP_HOURS = 4
 
 # Number of surrounding messages to include as context for each cluster.
 CONTEXT_WINDOW = 15
+
+
+def _cache_path(cache_dir: str, url: str) -> str:
+    """Return the JSON cache file path for a channel URL."""
+    # Use the last path segment (channel ID) as the filename
+    slug = url.rstrip("/").split("/")[-1]
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"{slug}.json")
+
+
+def load_cache(cache_dir: str, url: str) -> list[dict] | None:
+    """Load cached raw messages for a URL, or None if no cache exists."""
+    path = _cache_path(cache_dir, url)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_cache(cache_dir: str, url: str, messages: list[dict]):
+    """Save raw scraped messages to the cache."""
+    path = _cache_path(cache_dir, url)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(messages, f, ensure_ascii=False, indent=2)
+    print(f"  Cached {len(messages)} messages -> {path}")
 
 
 def convert_scraped_messages(scraped: list[dict]) -> list[dict]:
@@ -161,25 +188,40 @@ def main():
     analyzer = AIAnalyzer(provider)
     report = KBReportGenerator(args.topic, [channel_name_from_url(u) for u in args.url_list])
 
-    # Step 1: Scrape all channels
+    # Step 1: Scrape all channels (or load from cache)
     print("[1/6] Scraping channel messages via Playwright...")
-    pw, browser, page = open_browser(args.session_dir, headless=True)
 
     all_channel_data: dict[str, list[dict]] = {}  # url -> converted messages
     total_messages = 0
+    urls_needing_scrape = []
 
-    try:
-        for url in args.url_list:
-            label = channel_name_from_url(url)
-            print(f"\n  Scraping {label}...")
-            raw_messages = scrape_channel(page, url, args.scroll_delay)
-            converted = convert_scraped_messages(raw_messages)
-            all_channel_data[url] = converted
-            total_messages += len(converted)
-            print(f"  {label}: {len(converted)} messages")
-    finally:
-        browser.close()
-        pw.stop()
+    for url in args.url_list:
+        label = channel_name_from_url(url)
+        if not args.no_cache:
+            cached = load_cache(args.cache_dir, url)
+            if cached is not None:
+                print(f"\n  {label}: loaded {len(cached)} messages from cache")
+                converted = convert_scraped_messages(cached)
+                all_channel_data[url] = converted
+                total_messages += len(converted)
+                continue
+        urls_needing_scrape.append(url)
+
+    if urls_needing_scrape:
+        pw, browser, page = open_browser(args.session_dir, headless=True)
+        try:
+            for url in urls_needing_scrape:
+                label = channel_name_from_url(url)
+                print(f"\n  Scraping {label}...")
+                raw_messages = scrape_channel(page, url, args.scroll_delay)
+                save_cache(args.cache_dir, url, raw_messages)
+                converted = convert_scraped_messages(raw_messages)
+                all_channel_data[url] = converted
+                total_messages += len(converted)
+                print(f"  {label}: {len(converted)} messages")
+        finally:
+            browser.close()
+            pw.stop()
 
     if total_messages == 0:
         print("  No messages found in any channel.")

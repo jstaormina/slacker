@@ -186,14 +186,24 @@ def parse_args(argv=None):
     parser.add_argument(
         "--format",
         choices=["pdf", "html", "md"],
-        default="pdf",
-        help="Output format: pdf, html, or md (default: pdf).",
+        default="md",
+        help="Output format: pdf, html, or md (default: md).",
     )
     parser.add_argument(
         "--scroll-delay",
         type=float,
         default=3.0,
         help="Seconds between scroll steps when scraping (default: 3.0).",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=".slack-cache",
+        help="Directory to cache raw scraped messages (default: .slack-cache).",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Skip cache and always re-scrape via Playwright.",
     )
 
     args = parser.parse_args(argv)
