@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+.slack-session
+.slack-cache
+kb
+dist
+build
+*.spec
+.git
+.gitignore
+.env
+.env.*
+.credentials.json
+.venv
+.vscode
+.idea

@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slacker
+  namespace: slacker
+  labels:
+    app: slacker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: slacker
+  template:
+    metadata:
+      labels:
+        app: slacker
+    spec:
+      containers:
+        - name: slacker
+          image: ghcr.io/jstaormina/slacker:latest
+          ports:
+            - containerPort: 5000
+          env:
+            - name: AI_PROVIDER
+              value: cli  # cli, api, openai, lmstudio, ollama
+            - name: SLACK_SESSION_DIR
+              value: /data/slack-session
+            - name: SLACK_CACHE_DIR
+              value: /data/slack-cache
+            - name: KB_OUTPUT_DIR
+              value: /data/kb
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: claude-credentials
+              mountPath: /data/claude-auth
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: slacker-data
+        - name: claude-credentials
+          secret:
+            secretName: claude-credentials

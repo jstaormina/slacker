@@ -1,0 +1,17 @@
+services:
+  slacker:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - AI_PROVIDER=cli  # cli, api, openai, lmstudio, ollama
+      # - ANTHROPIC_API_KEY=sk-ant-...      # for api provider
+      # - CLAUDE_MODEL=claude-sonnet-4-6    # for cli/api provider
+      # - OPENAI_BASE_URL=https://...       # for openai provider
+      # - OPENAI_API_KEY=sk-...             # for openai provider
+      # - OPENAI_MODEL=gpt-4o              # for openai provider
+    volumes:
+      - ~/.claude/.credentials.json:/data/claude-auth/.credentials.json:ro
+      - ./.slack-session:/data/slack-session
+      - ./.slack-cache:/data/slack-cache
+      - ./kb:/data/kb

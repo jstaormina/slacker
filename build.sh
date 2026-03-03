@@ -20,7 +20,7 @@ playwright install chromium
 
 echo "Building standalone binary..."
 pyinstaller --onefile slack_search.py \
-  --name slack-search \
+  --name slacker \
   --hidden-import anthropic \
   --hidden-import config \
   --hidden-import scrape_slack \
@@ -30,5 +30,5 @@ pyinstaller --onefile slack_search.py \
   --hidden-import fpdf
 
 echo ""
-echo "Build complete! Binary is at: dist/slack-search"
-echo "Run it with: ./dist/slack-search --help"
+echo "Build complete! Binary is at: dist/slacker"
+echo "Run it with: ./dist/slacker --help"

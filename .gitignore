@@ -21,3 +21,12 @@ kb/
 
 # Environment / secrets
 .env
+.env.*
+!.env.example
+
+# Claude CLI credentials
+.credentials.json
+
+# IDE
+.vscode/
+.idea/

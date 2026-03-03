@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: slacker
+  namespace: slacker
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - slacker.example.com  # TODO: replace with your domain
+      secretName: slacker-tls
+  rules:
+    - host: slacker.example.com  # TODO: replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: slacker
+                port:
+                  number: 80

@@ -38,20 +38,20 @@ def _extract_json(text: str):
             except json.JSONDecodeError:
                 pass
 
-    # Strategy 3: find first balanced [...] or {...}
+    # Strategy 3: find last balanced [...] or {...} (search from end to skip thinking preamble)
     for open_ch, close_ch in [("[", "]"), ("{", "}")]:
-        start = text.find(open_ch)
-        if start == -1:
+        end = text.rfind(close_ch)
+        if end == -1:
             continue
         depth = 0
-        for i in range(start, len(text)):
-            if text[i] == open_ch:
+        for i in range(end, -1, -1):
+            if text[i] == close_ch:
                 depth += 1
-            elif text[i] == close_ch:
+            elif text[i] == open_ch:
                 depth -= 1
                 if depth == 0:
                     try:
-                        return json.loads(text[start : i + 1])
+                        return json.loads(text[i : end + 1])
                     except json.JSONDecodeError:
                         break
 
@@ -228,6 +228,87 @@ FALLBACK_EXTRACTION = {
     "source_summary": "Unable to extract.",
 }
 
+# JSON schemas for structured output
+CLASSIFICATION_SCHEMA = {
+    "name": "classification",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["index", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["results"],
+        "additionalProperties": False,
+    },
+}
+
+EXTRACTION_SCHEMA = {
+    "name": "extraction",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "category": {"type": "string"},
+            "content": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "source_summary": {"type": "string"},
+        },
+        "required": ["title", "category", "content", "tags", "source_summary"],
+        "additionalProperties": False,
+    },
+}
+
+GROUPING_SCHEMA = {
+    "name": "grouping",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "groups": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "group_title": {"type": "string"},
+                        "indices": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["group_title", "indices"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["groups"],
+        "additionalProperties": False,
+    },
+}
+
+SYNTHESIS_SCHEMA = {
+    "name": "synthesis",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "category": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["title", "category", "content"],
+        "additionalProperties": False,
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Provider base class
@@ -235,7 +316,7 @@ FALLBACK_EXTRACTION = {
 
 class AIProvider(ABC):
     @abstractmethod
-    def complete(self, prompt: str, max_tokens: int = 2048) -> str:
+    def complete(self, prompt: str, max_tokens: int = 2048, response_schema: dict | None = None) -> str:
         """Send a prompt and return the text response."""
 
     @property
@@ -258,7 +339,7 @@ class ClaudeAPIProvider(AIProvider):
     def name(self) -> str:
         return f"Claude API ({self.model})"
 
-    def complete(self, prompt: str, max_tokens: int = 2048) -> str:
+    def complete(self, prompt: str, max_tokens: int = 2048, response_schema: dict | None = None) -> str:
         import anthropic
         try:
             resp = self.client.messages.create(
@@ -294,7 +375,7 @@ class ClaudeCLIProvider(AIProvider):
     def name(self) -> str:
         return f"Claude CLI{f' ({self.model})' if self.model else ''}"
 
-    def complete(self, prompt: str, max_tokens: int = 2048) -> str:
+    def complete(self, prompt: str, max_tokens: int = 2048, response_schema: dict | None = None) -> str:
         cmd = ["claude", "-p", "--output-format", "text"]
         if self.model:
             cmd.extend(["--model", self.model])
@@ -333,7 +414,7 @@ class OllamaProvider(AIProvider):
     def name(self) -> str:
         return f"Ollama ({self.model})"
 
-    def complete(self, prompt: str, max_tokens: int = 2048) -> str:
+    def complete(self, prompt: str, max_tokens: int = 2048, response_schema: dict | None = None) -> str:
         payload = json.dumps({
             "model": self.model,
             "prompt": prompt,
@@ -380,7 +461,7 @@ class LMStudioProvider(AIProvider):
     def name(self) -> str:
         return f"LM Studio ({self.model or 'auto'})"
 
-    def complete(self, prompt: str, max_tokens: int = 2048) -> str:
+    def complete(self, prompt: str, max_tokens: int = 2048, response_schema: dict | None = None) -> str:
         body: dict = {
             "messages": [
                 {"role": "system", "content": "You are a JSON-only assistant. You output ONLY valid JSON with no explanation, commentary, or thinking. Never include text outside the JSON."},
@@ -389,7 +470,15 @@ class LMStudioProvider(AIProvider):
             "max_tokens": max_tokens,
             "stream": False,
             "temperature": 0.1,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
+        if response_schema:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": response_schema,
+            }
+        else:
+            body["response_format"] = {"type": "json_object"}
         if self.model:
             body["model"] = self.model
 
@@ -408,12 +497,81 @@ class LMStudioProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
+# OpenAI-compatible API provider (works with any OpenAI-compatible endpoint)
+# ---------------------------------------------------------------------------
+
+class OpenAICompatibleProvider(AIProvider):
+    def __init__(self, base_url: str, api_key: str = "", model: str = ""):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        # Verify endpoint is reachable and auto-detect model if needed
+        try:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            req = urllib.request.Request(f"{self.base_url}/v1/models", headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                models = data.get("data", [])
+                if not self.model and models:
+                    self.model = models[0].get("id", "unknown")
+        except (urllib.error.URLError, OSError) as e:
+            raise RuntimeError(
+                f"Cannot connect to OpenAI-compatible API at {self.base_url}. "
+                f"Check the URL and ensure the server is running: {e}"
+            ) from e
+
+    @property
+    def name(self) -> str:
+        return f"OpenAI Compatible ({self.model or 'unknown'} at {self.base_url})"
+
+    def complete(self, prompt: str, max_tokens: int = 2048, response_schema: dict | None = None) -> str:
+        body: dict = {
+            "messages": [
+                {"role": "system", "content": "You are a JSON-only assistant. You output ONLY valid JSON with no explanation, commentary, or thinking. Never include text outside the JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "stream": False,
+            "temperature": 0.1,
+        }
+        if response_schema:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": response_schema,
+            }
+        else:
+            body["response_format"] = {"type": "json_object"}
+        if self.model:
+            body["model"] = self.model
+
+        payload = json.dumps(body).encode()
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        req = urllib.request.Request(
+            f"{self.base_url}/v1/chat/completions",
+            data=payload,
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                data = json.loads(resp.read())
+                return data["choices"][0]["message"]["content"].strip()
+        except (urllib.error.URLError, OSError) as e:
+            raise RuntimeError(f"OpenAI-compatible API error: {e}") from e
+
+
+# ---------------------------------------------------------------------------
 # Analyzer (uses any provider)
 # ---------------------------------------------------------------------------
 
 class AIAnalyzer:
-    def __init__(self, provider: AIProvider):
+    def __init__(self, provider: AIProvider, log=print):
         self.provider = provider
+        self.log = log
 
     def classify_messages(self, messages: list[dict], topic: str) -> list[dict]:
         """Classify messages as relevant or not. Returns relevant messages with 'relevance_reason'."""
@@ -427,8 +585,11 @@ class AIAnalyzer:
     def _classify_batch(self, messages: list[dict], topic: str) -> list[dict]:
         prompt = _build_classification_prompt(messages, topic)
         try:
-            content = self.provider.complete(prompt, max_tokens=4096)
+            content = self.provider.complete(prompt, max_tokens=4096, response_schema=CLASSIFICATION_SCHEMA)
             results = _extract_json(content)
+            # Unwrap {"results": [...]} envelope from json_schema format
+            if isinstance(results, dict) and "results" in results:
+                results = results["results"]
             if not isinstance(results, list):
                 results = [results]
             relevant = []
@@ -448,10 +609,10 @@ class AIAnalyzer:
                     relevant.append(msg)
             return relevant
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
-            print(f"  Warning: Could not parse classification response: {e}")
+            self.log(f"  Warning: Could not parse classification response: {e}")
             return []
         except RuntimeError as e:
-            print(f"  Error: {e}")
+            self.log(f"  Error: {e}")
             return []
 
     def extract_knowledge(
@@ -464,13 +625,19 @@ class AIAnalyzer:
         """Extract knowledge from a conversation cluster."""
         prompt = _build_extraction_prompt(thread_messages, channel_name, user_names, topic)
         try:
-            content = self.provider.complete(prompt, max_tokens=4096)
-            return _extract_json(content)
+            content = self.provider.complete(prompt, max_tokens=4096, response_schema=EXTRACTION_SCHEMA)
+            result = _extract_json(content)
+            if isinstance(result, list):
+                result = result[0] if result else dict(FALLBACK_EXTRACTION)
+            if not isinstance(result, dict):
+                self.log(f"  Warning: extraction returned {type(result).__name__}, skipping")
+                return dict(FALLBACK_EXTRACTION)
+            return result
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"  Warning: Could not parse extraction response: {e}")
+            self.log(f"  Warning: Could not parse extraction response: {e}")
             return dict(FALLBACK_EXTRACTION)
         except RuntimeError as e:
-            print(f"  Error: {e}")
+            self.log(f"  Error: {e}")
             return dict(FALLBACK_EXTRACTION)
 
     def group_topics(self, extractions: list[dict]) -> list[dict]:
@@ -480,8 +647,11 @@ class AIAnalyzer:
 
         prompt = _build_grouping_prompt(extractions)
         try:
-            content = self.provider.complete(prompt, max_tokens=2048)
+            content = self.provider.complete(prompt, max_tokens=2048, response_schema=GROUPING_SCHEMA)
             groups = _extract_json(content)
+            # Unwrap {"groups": [...]} envelope from json_schema format
+            if isinstance(groups, dict) and "groups" in groups:
+                groups = groups["groups"]
             if not isinstance(groups, list):
                 groups = [groups]
             # Ensure every index appears
@@ -497,13 +667,13 @@ class AIAnalyzer:
                     })
             return groups
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            print(f"  Warning: Could not parse grouping response: {e}")
+            self.log(f"  Warning: Could not parse grouping response: {e}")
             return [
                 {"group_title": ext.get("title", "Untitled"), "indices": [i]}
                 for i, ext in enumerate(extractions)
             ]
         except RuntimeError as e:
-            print(f"  Error: {e}")
+            self.log(f"  Error: {e}")
             return [
                 {"group_title": ext.get("title", "Untitled"), "indices": [i]}
                 for i, ext in enumerate(extractions)
@@ -526,10 +696,10 @@ class AIAnalyzer:
 
         prompt = _build_synthesis_prompt(group_title, extractions, topic)
         try:
-            content = self.provider.complete(prompt, max_tokens=8192)
+            content = self.provider.complete(prompt, max_tokens=8192, response_schema=SYNTHESIS_SCHEMA)
             return _extract_json(content)
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"  Warning: Could not parse synthesis response: {e}")
+            self.log(f"  Warning: Could not parse synthesis response: {e}")
             combined = "\n\n".join(ext.get("content", "") for ext in extractions)
             return {
                 "title": group_title,
@@ -537,7 +707,7 @@ class AIAnalyzer:
                 "content": combined,
             }
         except RuntimeError as e:
-            print(f"  Error: {e}")
+            self.log(f"  Error: {e}")
             combined = "\n\n".join(ext.get("content", "") for ext in extractions)
             return {
                 "title": group_title,

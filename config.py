@@ -1,11 +1,11 @@
-"""Configuration, argument parsing, and interactive setup for Slack Topic Search."""
+"""Configuration, argument parsing, and interactive setup for Slacker."""
 
 import argparse
 import getpass
 import os
 import sys
 
-from ai_analyzer import AIProvider, ClaudeAPIProvider, ClaudeCLIProvider, LMStudioProvider, OllamaProvider
+from ai_analyzer import AIProvider, ClaudeAPIProvider, ClaudeCLIProvider, LMStudioProvider, OllamaProvider, OpenAICompatibleProvider
 
 
 def _prompt_choice(prompt: str, options: list[str], default: int = 1) -> int:
@@ -40,7 +40,8 @@ def _setup_provider(args) -> AIProvider:
         [
             "Claude CLI  — uses your Claude Code / Max subscription (free, no API key)",
             "Claude API  — requires Anthropic API key (pay-per-use)",
-            "LM Studio   — local model via LM Studio (OpenAI-compatible API)",
+            "OpenAI API  — any OpenAI-compatible endpoint (OpenAI, Together, vLLM, etc.)",
+            "LM Studio   — local model via LM Studio",
             "Ollama      — local model, free, requires Ollama running",
         ],
         default=1,
@@ -51,6 +52,8 @@ def _setup_provider(args) -> AIProvider:
     elif choice == 2:
         return _setup_claude_api(args)
     elif choice == 3:
+        return _setup_openai_compatible(args)
+    elif choice == 4:
         return _setup_lmstudio(args)
     else:
         return _setup_ollama(args)
@@ -81,6 +84,22 @@ def _setup_lmstudio(args) -> LMStudioProvider:
     return provider
 
 
+def _setup_openai_compatible(args) -> OpenAICompatibleProvider:
+    base_url = args.openai_url or input("  Base URL (e.g. https://api.openai.com): ").strip()
+    if not base_url:
+        print("  Error: Base URL is required.")
+        sys.exit(1)
+    api_key = args.openai_api_key or ""
+    if not api_key:
+        api_key = input("  API key (leave empty if not needed): ").strip()
+    model = args.openai_model or ""
+    if not model:
+        model = input("  Model name (leave empty to auto-detect): ").strip()
+    provider = OpenAICompatibleProvider(base_url=base_url, api_key=api_key, model=model)
+    print(f"  Using OpenAI-compatible API ({provider.model} at {base_url})")
+    return provider
+
+
 def _setup_ollama(args) -> OllamaProvider:
     model = args.ollama_model or "llama3.1"
     base_url = args.ollama_url or "http://localhost:11434"
@@ -95,19 +114,21 @@ def _build_provider_from_args(args) -> AIProvider:
         return _setup_claude_cli(args)
     elif p in ("api", "claude-api"):
         return _setup_claude_api(args)
+    elif p in ("openai", "openai-compatible"):
+        return _setup_openai_compatible(args)
     elif p in ("lmstudio", "lm-studio"):
         return _setup_lmstudio(args)
     elif p == "ollama":
         return _setup_ollama(args)
     else:
         print(f"  Unknown provider: {args.provider}")
-        print(f"  Valid options: cli, api, lmstudio, ollama")
+        print(f"  Valid options: cli, api, openai, lmstudio, ollama")
         sys.exit(1)
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        prog="slack-search",
+        prog="slacker",
         description="Extract knowledge from Slack conversations and generate organized KB articles.",
     )
 
@@ -132,7 +153,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--provider",
         default=None,
-        help="AI provider: cli (Claude CLI), api (Claude API), lmstudio, ollama. "
+        help="AI provider: cli (Claude CLI), api (Claude API), openai (OpenAI-compatible), lmstudio, ollama. "
              "If omitted, you'll be prompted interactively.",
     )
     parser.add_argument(
@@ -144,6 +165,21 @@ def parse_args(argv=None):
         "--model",
         default="claude-sonnet-4-6",
         help="Model name for Claude API provider (default: claude-sonnet-4-6).",
+    )
+    parser.add_argument(
+        "--openai-url",
+        default=None,
+        help="Base URL for OpenAI-compatible API (e.g. https://api.openai.com, http://localhost:8000).",
+    )
+    parser.add_argument(
+        "--openai-api-key",
+        default=None,
+        help="API key for OpenAI-compatible provider.",
+    )
+    parser.add_argument(
+        "--openai-model",
+        default=None,
+        help="Model name for OpenAI-compatible provider (auto-detected if not specified).",
     )
     parser.add_argument(
         "--lmstudio-model",
@@ -185,9 +221,9 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--format",
-        choices=["pdf", "html", "md"],
+        choices=["pdf", "html", "md", "docx"],
         default="md",
-        help="Output format: pdf, html, or md (default: md).",
+        help="Output format: pdf, html, md, or docx (default: md).",
     )
     parser.add_argument(
         "--scroll-delay",

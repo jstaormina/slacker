@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slacker</title>
+<style>
+  :root {
+    --purple: #4A154B;
+    --purple-light: #611f69;
+    --purple-faint: #f3e8f4;
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --border: #e1e4e8;
+    --text: #1d1c1d;
+    --text-muted: #616061;
+    --green: #007a5a;
+    --red: #e01e5a;
+    --terminal-bg: #1a1d21;
+    --terminal-text: #d1d2d3;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  header {
+    background: var(--purple);
+    color: white;
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  header h1 { font-size: 1.25rem; font-weight: 700; }
+  header span { font-size: 0.85rem; opacity: 0.8; }
+
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-body { padding: 1.25rem; }
+
+  /* Forms */
+  .form-row {
+    margin-bottom: 1rem;
+  }
+  .form-row:last-child { margin-bottom: 0; }
+  label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+    color: var(--text);
+  }
+  label .hint {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+  input[type="text"], input[type="password"], input[type="number"], textarea, select {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    background: #fff;
+    transition: border-color 0.15s;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: var(--purple);
+    box-shadow: 0 0 0 3px rgba(74, 21, 75, 0.1);
+  }
+  textarea { resize: vertical; min-height: 60px; }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 600px) {
+    .form-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.25rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--purple);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--purple-light); }
+  .btn-secondary {
+    background: #f8f8f8;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover:not(:disabled) { background: #eee; }
+  .btn-small {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+  }
+  .btn-green { background: var(--green); color: white; }
+  .btn-green:hover:not(:disabled) { background: #006349; }
+
+  .btn-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 1rem;
+  }
+
+  /* Progress section */
+  .step-bar {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 1rem;
+  }
+  .step-segment {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    transition: background 0.3s;
+  }
+  .step-segment.done { background: var(--green); }
+  .step-segment.active {
+    background: var(--purple);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .step-label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+
+  .log-area {
+    background: var(--terminal-bg);
+    color: var(--terminal-text);
+    font-family: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    padding: 1rem;
+    border-radius: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .log-area .log-line { display: block; }
+  .log-area .log-line::before {
+    content: "> ";
+    color: #616061;
+  }
+
+  /* Results */
+  .results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .results-count {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .article-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+  }
+  .article-card:last-child { margin-bottom: 0; }
+  .article-toggle {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: var(--purple-faint);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--purple);
+    text-align: left;
+  }
+  .article-toggle:hover { background: #ecdded; }
+  .article-toggle .arrow {
+    transition: transform 0.2s;
+    font-size: 0.75rem;
+  }
+  .article-toggle.open .arrow { transform: rotate(90deg); }
+  .article-category {
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: var(--purple);
+    color: white;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    margin-left: 0.5rem;
+  }
+  .article-content {
+    display: none;
+    padding: 1.25rem;
+    font-size: 0.9rem;
+    line-height: 1.7;
+  }
+  .article-content.open { display: block; }
+  .article-content h1, .article-content h2, .article-content h3 {
+    margin-top: 1.25em;
+    margin-bottom: 0.5em;
+  }
+  .article-content h1 { font-size: 1.3rem; }
+  .article-content h2 { font-size: 1.1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+  .article-content h3 { font-size: 1rem; }
+  .article-content p { margin-bottom: 0.75em; }
+  .article-content code {
+    background: #f6f8fa;
+    padding: 0.15em 0.35em;
+    border-radius: 3px;
+    font-size: 85%;
+  }
+  .article-content pre {
+    background: #f6f8fa;
+    padding: 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin-bottom: 0.75em;
+  }
+  .article-content pre code { background: none; padding: 0; }
+  .article-content ul, .article-content ol {
+    padding-left: 1.5em;
+    margin-bottom: 0.75em;
+  }
+
+  .error-banner {
+    background: #fce4ec;
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+  <h1>Slacker</h1>
+  <span>Extract knowledge from Slack conversations</span>
+</header>
+
+<div class="container">
+
+  <!-- Status Card -->
+  <div class="card">
+    <div class="card-header">Status</div>
+    <div class="card-body" style="display:flex;gap:2rem;font-size:0.9rem">
+      <div>
+        <strong>AI Provider</strong><br>
+        {% if provider_ok %}
+          <span style="color:var(--green)">{{ provider_msg }}</span>
+        {% else %}
+          <span style="color:var(--red)">{{ provider_msg }}</span>
+        {% endif %}
+      </div>
+      <div>
+        <strong>Slack Session</strong><br>
+        {% if slack_ok %}
+          <span style="color:var(--green)">{{ slack_msg }}</span>
+        {% else %}
+          <span style="color:var(--red)">{{ slack_msg }}</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Config Card -->
+  <div class="card">
+    <div class="card-header">Configuration</div>
+    <div class="card-body">
+      <form id="config-form" onsubmit="startExtraction(event)">
+        <div class="form-row">
+          <label>Topic <span class="hint">(what knowledge to extract)</span></label>
+          <input type="text" name="topic" required placeholder='e.g. "AML", "deployment", "onboarding"'>
+        </div>
+
+        <div class="form-row">
+          <label>Channel URLs <span class="hint">(comma-separated)</span></label>
+          <textarea name="urls" required placeholder="https://app.slack.com/client/TGG6BJ82E/CGG6BJN5Q, https://app.slack.com/client/TGG6BJ82E/CABC123"></textarea>
+        </div>
+
+        <div class="form-row">
+          <label>Output Format</label>
+          <select name="format">
+            <option value="md">Markdown</option>
+            <option value="html">HTML</option>
+            <option value="pdf">PDF</option>
+            <option value="docx">Word (.docx)</option>
+          </select>
+        </div>
+
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary" id="run-btn">Extract Knowledge</button>
+          <span id="run-status" style="font-size:0.85rem;color:var(--text-muted)"></span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Progress Card -->
+  <div class="card hidden" id="progress-card">
+    <div class="card-header">
+      Progress
+      <span id="step-label" class="step-label" style="margin:0"></span>
+    </div>
+    <div class="card-body">
+      <div class="step-bar" id="step-bar">
+        <div class="step-segment" data-step="1"></div>
+        <div class="step-segment" data-step="2"></div>
+        <div class="step-segment" data-step="3"></div>
+        <div class="step-segment" data-step="4"></div>
+        <div class="step-segment" data-step="5"></div>
+        <div class="step-segment" data-step="6"></div>
+      </div>
+      <div class="log-area" id="log-area"></div>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="error-banner hidden" id="error-banner"></div>
+
+  <!-- Results Card -->
+  <div class="card hidden" id="results-card">
+    <div class="card-header">
+      Results
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <span id="results-badge" style="font-size:0.85rem;font-weight:400;color:var(--text-muted)"></span>
+        <a id="download-btn" class="btn btn-green btn-small hidden" href="#" download>Download ZIP</a>
+      </div>
+    </div>
+    <div class="card-body">
+      <div id="articles-container"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Run extraction
+// ---------------------------------------------------------------------------
+let currentEventSource = null;
+let currentJobId = null;
+
+async function startExtraction(e) {
+  e.preventDefault();
+
+  // Collect form data
+  const form = document.getElementById('config-form');
+  const fd = new FormData(form);
+  const config = {};
+  for (const [k, v] of fd.entries()) config[k] = v;
+
+  // Reset UI
+  document.getElementById('progress-card').classList.remove('hidden');
+  document.getElementById('results-card').classList.add('hidden');
+  document.getElementById('error-banner').classList.add('hidden');
+  document.getElementById('log-area').innerHTML = '';
+  resetStepBar();
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('run-status').textContent = 'Running...';
+
+  try {
+    const resp = await fetch('/api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showError(data.error || 'Failed to start job.');
+      return;
+    }
+
+    // Connect to SSE stream
+    currentJobId = data.job_id;
+    listenToProgress(data.job_id);
+  } catch (e) {
+    showError('Error: ' + e.message);
+    document.getElementById('run-btn').disabled = false;
+    document.getElementById('run-status').textContent = '';
+  }
+}
+
+function listenToProgress(jobId) {
+  if (currentEventSource) currentEventSource.close();
+
+  const es = new EventSource('/api/progress/' + jobId);
+  currentEventSource = es;
+
+  es.onmessage = function(event) {
+    const msg = JSON.parse(event.data);
+
+    if (msg.type === 'log') {
+      appendLog(msg.message);
+      updateStepFromMessage(msg.message);
+    } else if (msg.type === 'complete') {
+      es.close();
+      completeAllSteps();
+      document.getElementById('run-btn').disabled = false;
+      document.getElementById('run-status').textContent = '';
+      showResults(msg.result);
+    } else if (msg.type === 'error') {
+      es.close();
+      document.getElementById('run-btn').disabled = false;
+      document.getElementById('run-status').textContent = '';
+      showError(msg.message);
+    }
+    // ignore heartbeat
+  };
+
+  es.onerror = function() {
+    es.close();
+    document.getElementById('run-btn').disabled = false;
+    document.getElementById('run-status').textContent = '';
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Progress display
+// ---------------------------------------------------------------------------
+function appendLog(msg) {
+  const area = document.getElementById('log-area');
+  const line = document.createElement('span');
+  line.className = 'log-line';
+  line.textContent = msg;
+  area.appendChild(line);
+  area.scrollTop = area.scrollHeight;
+}
+
+function updateStepFromMessage(msg) {
+  // Parse [N/6] pattern
+  const match = msg.match(/\[(\d+)\/6\]/);
+  if (!match) return;
+  const step = parseInt(match[1]);
+  setStep(step);
+}
+
+function setStep(step) {
+  const segments = document.querySelectorAll('.step-segment');
+  const labels = ['Scraping', 'Classifying', 'Clustering', 'Extracting', 'Grouping', 'Synthesizing'];
+  segments.forEach((seg, i) => {
+    seg.classList.remove('done', 'active');
+    if (i + 1 < step) seg.classList.add('done');
+    else if (i + 1 === step) seg.classList.add('active');
+  });
+  document.getElementById('step-label').textContent = `Step ${step}/6: ${labels[step-1] || ''}`;
+}
+
+function completeAllSteps() {
+  document.querySelectorAll('.step-segment').forEach(seg => {
+    seg.classList.remove('active');
+    seg.classList.add('done');
+  });
+  document.getElementById('step-label').textContent = 'Complete';
+}
+
+function resetStepBar() {
+  document.querySelectorAll('.step-segment').forEach(seg => {
+    seg.classList.remove('done', 'active');
+  });
+  document.getElementById('step-label').textContent = '';
+}
+
+// ---------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------
+function showResults(result) {
+  const card = document.getElementById('results-card');
+  const container = document.getElementById('articles-container');
+  const badge = document.getElementById('results-badge');
+  container.innerHTML = '';
+
+  const dlBtn = document.getElementById('download-btn');
+  dlBtn.classList.add('hidden');
+
+  if (!result || !result.articles || result.articles.length === 0) {
+    badge.textContent = 'No articles generated';
+    container.innerHTML = '<p style="color:var(--text-muted)">No knowledge articles were extracted. Try different channels or a broader topic.</p>';
+    card.classList.remove('hidden');
+    return;
+  }
+
+  badge.textContent = result.article_count + ' article(s)';
+
+  if (currentJobId) {
+    dlBtn.href = '/api/download/' + currentJobId;
+    dlBtn.classList.remove('hidden');
+  }
+
+  result.articles.forEach((article, idx) => {
+    const div = document.createElement('div');
+    div.className = 'article-card';
+
+    const toggle = document.createElement('button');
+    toggle.className = 'article-toggle' + (idx === 0 ? ' open' : '');
+    toggle.innerHTML = `
+      <span>${escapeHtml(article.title)} <span class="article-category">${escapeHtml(article.category)}</span></span>
+      <span class="arrow">&#9654;</span>
+    `;
+
+    const content = document.createElement('div');
+    content.className = 'article-content' + (idx === 0 ? ' open' : '');
+    content.innerHTML = marked.parse(article.content || '');
+
+    toggle.onclick = function() {
+      toggle.classList.toggle('open');
+      content.classList.toggle('open');
+    };
+
+    div.appendChild(toggle);
+    div.appendChild(content);
+    container.appendChild(div);
+  });
+
+  card.classList.remove('hidden');
+  card.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-banner');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+</script>
+</body>
+</html>

@@ -1,10 +1,11 @@
-"""Report generator for knowledge base articles in Markdown, HTML, and PDF."""
+"""Report generator for knowledge base articles in Markdown, HTML, PDF, and DOCX."""
 
 import os
 import re
 from datetime import datetime, timezone
 
 import markdown
+from docx import Document
 from fpdf import FPDF
 
 
@@ -256,11 +257,82 @@ class KBReportGenerator:
         pdf.output(out_path)
         return out_path
 
+    def _write_docx(self, output_dir: str) -> str:
+        """Write the KB as a single Word document."""
+        os.makedirs(output_dir, exist_ok=True)
+        doc = Document()
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        channels_str = ", ".join(f"#{c}" for c in self.channel_names)
+
+        doc.add_heading(f"{self.topic} Knowledge Base", level=0)
+        meta = doc.add_paragraph()
+        meta.add_run(f"Generated: {now}\n").bold = True
+        meta.add_run(f"Source Channels: {channels_str}\n").bold = True
+        meta.add_run(f"Articles: {len(self.articles)}").bold = True
+
+        if not self.articles:
+            doc.add_paragraph(
+                f'No knowledge articles related to "{self.topic}" '
+                f"were found in the searched channels."
+            )
+        else:
+            # Group by category
+            by_category: dict[str, list[dict]] = {}
+            for article in self.articles:
+                by_category.setdefault(article["category"], []).append(article)
+
+            ordered_cats = [c for c in CATEGORY_ORDER if c in by_category]
+            ordered_cats += sorted(c for c in by_category if c not in CATEGORY_ORDER)
+
+            for cat in ordered_cats:
+                doc.add_heading(cat, level=1)
+                for article in by_category[cat]:
+                    doc.add_heading(article["title"], level=2)
+                    doc.add_paragraph(f"Category: {article['category']}")
+
+                    # Article body - split into paragraphs
+                    for para_text in article["content"].split("\n\n"):
+                        para_text = para_text.strip()
+                        if not para_text:
+                            continue
+                        if para_text.startswith("# "):
+                            doc.add_heading(para_text.lstrip("# "), level=3)
+                        elif para_text.startswith("## "):
+                            doc.add_heading(para_text.lstrip("# "), level=4)
+                        elif para_text.startswith("- ") or para_text.startswith("* "):
+                            for line in para_text.split("\n"):
+                                line = line.lstrip("-* ").strip()
+                                if line:
+                                    doc.add_paragraph(line, style="List Bullet")
+                        else:
+                            doc.add_paragraph(para_text.replace("\n", " "))
+
+                    # Sources
+                    doc.add_paragraph("")  # spacer
+                    sources = doc.add_paragraph()
+                    sources.add_run("Sources:").bold = True
+                    if article["source_dates"]:
+                        dates = ", ".join(sorted(set(article["source_dates"])))
+                        doc.add_paragraph(f"Dates: {dates}", style="List Bullet")
+                    if article["source_channels"]:
+                        chs = ", ".join(f"#{c}" for c in sorted(set(article["source_channels"])))
+                        doc.add_paragraph(f"Channels: {chs}", style="List Bullet")
+                    if article["contributors"]:
+                        contribs = ", ".join(f"@{c}" for c in sorted(set(article["contributors"])))
+                        doc.add_paragraph(f"Contributors: {contribs}", style="List Bullet")
+
+        out_path = os.path.join(output_dir, "knowledge-base.docx")
+        doc.save(out_path)
+        return out_path
+
     def write(self, output_dir: str, fmt: str = "pdf") -> str:
         """Write the KB in the specified format. Returns the output path."""
         if fmt == "md":
             return self._write_md(output_dir)
         elif fmt == "html":
             return self._write_html(output_dir)
+        elif fmt == "docx":
+            return self._write_docx(output_dir)
         else:
             return self._write_pdf(output_dir)

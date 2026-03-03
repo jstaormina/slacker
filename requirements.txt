@@ -3,3 +3,6 @@ pyinstaller
 playwright
 markdown
 fpdf2
+python-docx
+flask
+gunicorn

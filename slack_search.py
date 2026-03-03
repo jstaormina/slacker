@@ -1,4 +1,4 @@
-"""Main CLI entry point for Slack Knowledge Base Extractor."""
+"""Main CLI entry point for Slacker."""
 
 import json
 import os
@@ -170,37 +170,51 @@ def channel_name_from_url(url: str) -> str:
     return parts[-1] if parts else url
 
 
-def main():
-    args, provider = setup()
+def run_extraction(
+    topic: str,
+    urls: list[str],
+    provider,
+    output_dir: str = "kb",
+    fmt: str = "md",
+    cache_dir: str = ".slack-cache",
+    session_dir: str = ".slack-session",
+    scroll_delay: float = 3.0,
+    no_cache: bool = False,
+    log=print,
+):
+    """Run the full KB extraction pipeline.
 
-    # Handle login mode
-    if args.login:
-        do_login(args.workspace, args.session_dir)
-        return
+    Args:
+        topic: Topic to extract knowledge about.
+        urls: List of Slack channel URLs to search.
+        provider: AIProvider instance.
+        output_dir: Output directory for KB articles.
+        fmt: Output format (md, html, pdf).
+        cache_dir: Directory to cache raw scraped messages.
+        session_dir: Directory for saved browser session.
+        scroll_delay: Seconds between scroll steps when scraping.
+        no_cache: If True, skip cache and always re-scrape.
+        log: Callable for progress messages (default: print).
 
-    print(f"\nSlack Knowledge Base Extractor")
-    print(f"  Topic: {args.topic}")
-    print(f"  Channels: {len(args.url_list)} URL(s)")
-    print(f"  Output: {args.output} ({args.format})")
-    print(f"  AI Provider: {provider.name}")
-    print()
-
-    analyzer = AIAnalyzer(provider)
-    report = KBReportGenerator(args.topic, [channel_name_from_url(u) for u in args.url_list])
+    Returns:
+        Dict with output_path, article_count, and articles list.
+    """
+    analyzer = AIAnalyzer(provider, log=log)
+    report = KBReportGenerator(topic, [channel_name_from_url(u) for u in urls])
 
     # Step 1: Scrape all channels (or load from cache)
-    print("[1/6] Scraping channel messages via Playwright...")
+    log("[1/6] Scraping channel messages via Playwright...")
 
-    all_channel_data: dict[str, list[dict]] = {}  # url -> converted messages
+    all_channel_data: dict[str, list[dict]] = {}
     total_messages = 0
     urls_needing_scrape = []
 
-    for url in args.url_list:
+    for url in urls:
         label = channel_name_from_url(url)
-        if not args.no_cache:
-            cached = load_cache(args.cache_dir, url)
+        if not no_cache:
+            cached = load_cache(cache_dir, url)
             if cached is not None:
-                print(f"\n  {label}: loaded {len(cached)} messages from cache")
+                log(f"  {label}: loaded {len(cached)} messages from cache")
                 converted = convert_scraped_messages(cached)
                 all_channel_data[url] = converted
                 total_messages += len(converted)
@@ -208,50 +222,45 @@ def main():
         urls_needing_scrape.append(url)
 
     if urls_needing_scrape:
-        pw, browser, page = open_browser(args.session_dir, headless=True)
+        pw, browser, page = open_browser(session_dir, headless=True)
         try:
             for url in urls_needing_scrape:
                 label = channel_name_from_url(url)
-                print(f"\n  Scraping {label}...")
-                raw_messages = scrape_channel(page, url, args.scroll_delay)
-                save_cache(args.cache_dir, url, raw_messages)
+                log(f"  Scraping {label}...")
+                raw_messages = scrape_channel(page, url, scroll_delay)
+                save_cache(cache_dir, url, raw_messages)
                 converted = convert_scraped_messages(raw_messages)
                 all_channel_data[url] = converted
                 total_messages += len(converted)
-                print(f"  {label}: {len(converted)} messages")
+                log(f"  {label}: {len(converted)} messages")
         finally:
             browser.close()
             pw.stop()
 
     if total_messages == 0:
-        print("  No messages found in any channel.")
-        report.write(args.output, args.format)
-        print(f"\nEmpty KB written to {args.output}/")
-        return
+        report.write(output_dir, fmt)
+        log("  No messages found in any channel.")
+        return {"output_path": output_dir, "article_count": 0, "articles": []}
 
     # Step 2: Classify messages with AI
-    print(f'\n[2/6] Analyzing {total_messages} messages for "{args.topic}" knowledge...')
+    log(f'[2/6] Analyzing {total_messages} messages for "{topic}" knowledge...')
     relevant_by_channel: dict[str, list[dict]] = {}
 
     for url, messages in all_channel_data.items():
         label = channel_name_from_url(url)
-        print(f"  {label}: analyzing {len(messages)} messages...", end=" ", flush=True)
-
         if not messages:
-            print("0 relevant")
             continue
-
-        relevant = analyzer.classify_messages(messages, args.topic)
+        log(f"  {label}: analyzing {len(messages)} messages...")
+        relevant = analyzer.classify_messages(messages, topic)
         if relevant:
             relevant_by_channel[url] = relevant
-        print(f"{len(relevant)} relevant")
+        log(f"  {label}: {len(relevant)} relevant")
 
     total_relevant = sum(len(v) for v in relevant_by_channel.values())
     if total_relevant == 0:
-        print(f'\n  No knowledge related to "{args.topic}" found.')
-        report.write(args.output, args.format)
-        print(f"\nEmpty KB written to {args.output}/")
-        return
+        report.write(output_dir, fmt)
+        log(f'  No knowledge related to "{topic}" found.')
+        return {"output_path": output_dir, "article_count": 0, "articles": []}
 
     # Steps 3-4: Cluster, gather context, dedup, extract knowledge
     all_extractions: list[dict] = []
@@ -260,19 +269,17 @@ def main():
         label = channel_name_from_url(url)
         all_messages = all_channel_data[url]
         clusters = cluster_messages(relevant_msgs)
-        print(f"\n[3/6] {label}: {len(relevant_msgs)} relevant msgs -> {len(clusters)} cluster(s)")
+        log(f"[3/6] {label}: {len(relevant_msgs)} relevant msgs -> {len(clusters)} cluster(s)")
 
         raw_clusters: list[dict] = []
 
         for cluster_idx, cluster in enumerate(clusters):
             first_ts = cluster[0].get("ts")
-            print(f"  cluster {cluster_idx + 1}/{len(clusters)} ({len(cluster)} msgs)...", end=" ", flush=True)
-
             context_messages = gather_context(cluster, all_messages)
             context_ts_set = {m["ts"] for m in context_messages}
             participants = {m.get("user") for m in context_messages if m.get("user")}
 
-            print(f"{len(context_messages)} context msgs")
+            log(f"  cluster {cluster_idx + 1}/{len(clusters)}: {len(cluster)} msgs, {len(context_messages)} context")
 
             raw_clusters.append({
                 "cluster": cluster,
@@ -286,12 +293,12 @@ def main():
             })
 
         deduped = dedup_by_context_overlap(raw_clusters, overlap_threshold=0.4)
-        print(f"  After dedup: {len(deduped)} unique cluster(s)")
+        log(f"  After dedup: {len(deduped)} unique cluster(s)")
 
         # Extract knowledge from each cluster
-        print(f"\n[4/6] Extracting knowledge from {len(deduped)} cluster(s)...")
+        log(f"[4/6] Extracting knowledge from {len(deduped)} cluster(s)...")
         for ext_idx, cluster_data in enumerate(deduped):
-            print(f"  Extracting {ext_idx + 1}/{len(deduped)}...", end=" ", flush=True)
+            log(f"  Extracting {ext_idx + 1}/{len(deduped)}...")
 
             user_names = {name: name for name in cluster_data["participants"]}
 
@@ -299,9 +306,9 @@ def main():
                 cluster_data["context_messages"],
                 cluster_data["channel_name"],
                 user_names,
-                args.topic,
+                topic,
             )
-            print(f"'{extraction.get('title', 'untitled')}'")
+            log(f"  -> '{extraction.get('title', 'untitled')}'")
 
             # Attach source metadata for report generation
             extraction["_source_channel"] = cluster_data["channel_name"]
@@ -311,18 +318,18 @@ def main():
             all_extractions.append(extraction)
 
     if not all_extractions:
-        print("  No knowledge extracted.")
-        report.write(args.output, args.format)
-        print(f"\nEmpty KB written to {args.output}/")
-        return
+        report.write(output_dir, fmt)
+        log("  No knowledge extracted.")
+        return {"output_path": output_dir, "article_count": 0, "articles": []}
 
     # Step 5: Group extractions by topic
-    print(f"\n[5/6] Grouping {len(all_extractions)} extraction(s) by topic...")
+    log(f"[5/6] Grouping {len(all_extractions)} extraction(s) by topic...")
     groups = analyzer.group_topics(all_extractions)
-    print(f"  {len(groups)} topic group(s) identified")
+    log(f"  {len(groups)} topic group(s) identified")
 
     # Step 6: Synthesize articles per group
-    print(f"\n[6/6] Synthesizing {len(groups)} KB article(s)...")
+    log(f"[6/6] Synthesizing {len(groups)} KB article(s)...")
+    articles_data = []
     for grp_idx, group in enumerate(groups):
         group_title = group.get("group_title", "Untitled")
         indices = group.get("indices", [])
@@ -331,10 +338,9 @@ def main():
         if not group_extractions:
             continue
 
-        print(f"  Article {grp_idx + 1}/{len(groups)}: '{group_title}'...", end=" ", flush=True)
+        log(f"  Article {grp_idx + 1}/{len(groups)}: '{group_title}'...")
 
-        article = analyzer.synthesize_article(group_title, group_extractions, args.topic)
-        print("done")
+        article = analyzer.synthesize_article(group_title, group_extractions, topic)
 
         # Collect source metadata from all extractions in the group
         source_channels = [ext.get("_source_channel", "") for ext in group_extractions]
@@ -351,11 +357,51 @@ def main():
             source_dates=source_dates,
             contributors=contributors,
         )
+        articles_data.append({
+            "title": article.get("title", group_title),
+            "category": article.get("category", "FAQ"),
+            "content": article.get("content", ""),
+        })
 
     # Generate report
-    output_path = report.write(args.output, args.format)
-    print(f"\nDone! Knowledge base written to {output_path}")
-    print(f"  {len(report.articles)} article(s) generated")
+    output_path = report.write(output_dir, fmt)
+    log(f"Done! {len(report.articles)} article(s) written to {output_path}")
+
+    return {
+        "output_path": output_path,
+        "article_count": len(report.articles),
+        "articles": articles_data,
+    }
+
+
+def main():
+    args, provider = setup()
+
+    # Handle login mode
+    if args.login:
+        do_login(args.workspace, args.session_dir)
+        return
+
+    print(f"\nSlacker")
+    print(f"  Topic: {args.topic}")
+    print(f"  Channels: {len(args.url_list)} URL(s)")
+    print(f"  Output: {args.output} ({args.format})")
+    print(f"  AI Provider: {provider.name}")
+    print()
+
+    result = run_extraction(
+        topic=args.topic,
+        urls=args.url_list,
+        provider=provider,
+        output_dir=args.output,
+        fmt=args.format,
+        cache_dir=args.cache_dir,
+        session_dir=args.session_dir,
+        scroll_delay=args.scroll_delay,
+        no_cache=args.no_cache,
+    )
+
+    print(f"\n  {result['article_count']} article(s) generated")
 
 
 if __name__ == "__main__":
