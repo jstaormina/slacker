@@ -80,17 +80,17 @@ def _build_classification_prompt(messages: list[dict], topic: str) -> str:
 
     return f"""You are a JSON-only classifier. No explanation. No thinking. Output ONLY valid JSON.
 
-Task: Which of these Slack messages contain knowledge worth capturing about "{topic}"?
+Task: Which of these Slack messages contain useful information about "{topic}"?
 
-Look for messages where someone is sharing expertise, not just chatting:
-- Troubleshooting exchanges (problem described, solution found)
-- How-to explanations or step-by-step guidance
-- Feature behavior descriptions or clarifications
-- Workarounds, tips, or best practices
-- Configuration guidance or specific settings
-- Q&A exchanges where questions get substantive answers
-- Edge cases, gotchas, or warnings
-- Process explanations or policy clarifications
+Look for messages where someone shares something informative or substantive about "{topic}":
+- Experiences, stories, or lessons learned
+- Tips, recommendations, or advice
+- Questions that get helpful answers
+- Troubleshooting or problem-solving
+- How-to explanations or guidance
+- Opinions backed by reasoning or personal experience
+- Useful links, resources, or references
+- Plans, schedules, or logistics with useful details
 
 Messages:
 {messages_text}
@@ -98,13 +98,13 @@ Messages:
 Output format — a JSON array, nothing else:
 [{{"index": 0, "reason": "brief reason"}}, ...]
 
-If none contain extractable knowledge, output: []
+If none contain useful information, output: []
 
 Rules:
-- Include messages that share actionable knowledge, procedures, or expertise about "{topic}"
-- Include follow-up messages that add detail, corrections, or confirmation to knowledge being shared
-- Exclude messages that merely mention "{topic}" casually without sharing knowledge
-- Exclude purely social or scheduling messages even if they mention the topic
+- Include messages that share useful, informative, or interesting content about "{topic}"
+- Include follow-up messages that add detail, context, or build on the discussion
+- Exclude messages that only mention "{topic}" in passing with no substance
+- Exclude messages that are purely greetings, reactions, or off-topic chatter
 - Output ONLY the JSON array. No other text before or after."""
 
 

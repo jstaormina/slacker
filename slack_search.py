@@ -9,6 +9,7 @@ from config import setup
 from scrape_slack import do_login, open_browser, scrape_channel
 from ai_analyzer import AIAnalyzer
 from report_generator import KBReportGenerator
+from slack_api import create_client, list_channels, resolve_channel_names, fetch_channel_messages
 
 # Messages within this many hours of each other are grouped into one cluster.
 CLUSTER_GAP_HOURS = 4
@@ -172,21 +173,23 @@ def channel_name_from_url(url: str) -> str:
 
 def run_extraction(
     topic: str,
-    urls: list[str],
-    provider,
+    urls: list[str] | None = None,
+    provider=None,
     output_dir: str = "kb",
     fmt: str = "md",
     cache_dir: str = ".slack-cache",
     session_dir: str = ".slack-session",
     scroll_delay: float = 3.0,
     no_cache: bool = False,
+    slack_api_token: str | None = None,
+    channel_names: list[str] | None = None,
     log=print,
 ):
     """Run the full KB extraction pipeline.
 
     Args:
         topic: Topic to extract knowledge about.
-        urls: List of Slack channel URLs to search.
+        urls: List of Slack channel URLs to search (Playwright mode).
         provider: AIProvider instance.
         output_dir: Output directory for KB articles.
         fmt: Output format (md, html, pdf).
@@ -194,48 +197,94 @@ def run_extraction(
         session_dir: Directory for saved browser session.
         scroll_delay: Seconds between scroll steps when scraping.
         no_cache: If True, skip cache and always re-scrape.
+        slack_api_token: Slack API token. If set, uses API instead of Playwright.
+        channel_names: Channel names to search (API mode). None = all channels.
         log: Callable for progress messages (default: print).
 
     Returns:
         Dict with output_path, article_count, and articles list.
     """
+    use_api = bool(slack_api_token)
+    urls = urls or []
+
+    # Determine channel labels for the report
+    if use_api:
+        channel_labels = list(channel_names) if channel_names else ["all channels"]
+    else:
+        channel_labels = [channel_name_from_url(u) for u in urls]
+
     analyzer = AIAnalyzer(provider, log=log)
-    report = KBReportGenerator(topic, [channel_name_from_url(u) for u in urls])
+    report = KBReportGenerator(topic, channel_labels)
 
-    # Step 1: Scrape all channels (or load from cache)
-    log("[1/6] Scraping channel messages via Playwright...")
-
+    # Step 1: Fetch messages via API or scrape via Playwright
     all_channel_data: dict[str, list[dict]] = {}
     total_messages = 0
-    urls_needing_scrape = []
 
-    for url in urls:
-        label = channel_name_from_url(url)
-        if not no_cache:
-            cached = load_cache(cache_dir, url)
-            if cached is not None:
-                log(f"  {label}: loaded {len(cached)} messages from cache")
-                converted = convert_scraped_messages(cached)
-                all_channel_data[url] = converted
-                total_messages += len(converted)
-                continue
-        urls_needing_scrape.append(url)
+    if use_api:
+        log("[1/6] Fetching channel messages via Slack API...")
+        client = create_client(slack_api_token)
+        user_cache = {}
 
-    if urls_needing_scrape:
-        pw, browser, page = open_browser(session_dir, headless=True)
-        try:
-            for url in urls_needing_scrape:
-                label = channel_name_from_url(url)
-                log(f"  Scraping {label}...")
-                raw_messages = scrape_channel(page, url, scroll_delay)
-                save_cache(cache_dir, url, raw_messages)
-                converted = convert_scraped_messages(raw_messages)
-                all_channel_data[url] = converted
-                total_messages += len(converted)
-                log(f"  {label}: {len(converted)} messages")
-        finally:
-            browser.close()
-            pw.stop()
+        if channel_names:
+            channels = resolve_channel_names(client, channel_names)
+        else:
+            log("  No channels specified, discovering all accessible channels...")
+            channels = list_channels(client)
+            log(f"  Found {len(channels)} channel(s)")
+
+        for ch in channels:
+            label = ch["name"]
+            cache_key = ch["id"]
+
+            if not no_cache:
+                cached = load_cache(cache_dir, cache_key)
+                if cached:
+                    log(f"  #{label}: loaded {len(cached)} messages from cache")
+                    # API cache is already in {ts, text, user} format
+                    all_channel_data[label] = cached
+                    total_messages += len(cached)
+                    continue
+
+            log(f"  #{label}: fetching messages...")
+            messages = fetch_channel_messages(client, ch["id"], label,
+                                              user_cache=user_cache, log=log)
+            # Save raw messages to cache (already in {ts, text, user} format)
+            save_cache(cache_dir, cache_key, messages)
+            all_channel_data[label] = messages
+            total_messages += len(messages)
+            log(f"  #{label}: {len(messages)} messages")
+    else:
+        log("[1/6] Scraping channel messages via Playwright...")
+
+        urls_needing_scrape = []
+
+        for url in urls:
+            label = channel_name_from_url(url)
+            if not no_cache:
+                cached = load_cache(cache_dir, url)
+                if cached:
+                    log(f"  {label}: loaded {len(cached)} messages from cache")
+                    converted = convert_scraped_messages(cached)
+                    all_channel_data[url] = converted
+                    total_messages += len(converted)
+                    continue
+            urls_needing_scrape.append(url)
+
+        if urls_needing_scrape:
+            pw, browser, page = open_browser(session_dir, headless=True)
+            try:
+                for url in urls_needing_scrape:
+                    label = channel_name_from_url(url)
+                    log(f"  Scraping {label}...")
+                    raw_messages = scrape_channel(page, url, scroll_delay)
+                    save_cache(cache_dir, url, raw_messages)
+                    converted = convert_scraped_messages(raw_messages)
+                    all_channel_data[url] = converted
+                    total_messages += len(converted)
+                    log(f"  {label}: {len(converted)} messages")
+            finally:
+                browser.close()
+                pw.stop()
 
     if total_messages == 0:
         report.write(output_dir, fmt)
@@ -246,14 +295,14 @@ def run_extraction(
     log(f'[2/6] Analyzing {total_messages} messages for "{topic}" knowledge...')
     relevant_by_channel: dict[str, list[dict]] = {}
 
-    for url, messages in all_channel_data.items():
-        label = channel_name_from_url(url)
+    for key, messages in all_channel_data.items():
+        label = key if use_api else channel_name_from_url(key)
         if not messages:
             continue
         log(f"  {label}: analyzing {len(messages)} messages...")
         relevant = analyzer.classify_messages(messages, topic)
         if relevant:
-            relevant_by_channel[url] = relevant
+            relevant_by_channel[key] = relevant
         log(f"  {label}: {len(relevant)} relevant")
 
     total_relevant = sum(len(v) for v in relevant_by_channel.values())
@@ -265,9 +314,9 @@ def run_extraction(
     # Steps 3-4: Cluster, gather context, dedup, extract knowledge
     all_extractions: list[dict] = []
 
-    for url, relevant_msgs in relevant_by_channel.items():
-        label = channel_name_from_url(url)
-        all_messages = all_channel_data[url]
+    for key, relevant_msgs in relevant_by_channel.items():
+        label = key if use_api else channel_name_from_url(key)
+        all_messages = all_channel_data[key]
         clusters = cluster_messages(relevant_msgs)
         log(f"[3/6] {label}: {len(relevant_msgs)} relevant msgs -> {len(clusters)} cluster(s)")
 
@@ -289,7 +338,7 @@ def run_extraction(
                 "first_ts": first_ts,
                 "date": datetime.fromtimestamp(float(first_ts or 0), tz=timezone.utc).strftime("%Y-%m-%d"),
                 "channel_name": label,
-                "channel_url": url,
+                "channel_url": key,
             })
 
         deduped = dedup_by_context_overlap(raw_clusters, overlap_threshold=0.4)
@@ -382,23 +431,33 @@ def main():
         do_login(args.workspace, args.session_dir)
         return
 
+    slack_token = getattr(args, "slack_api_token", None)
+    channel_names = getattr(args, "channel_list", None)
+    url_list = getattr(args, "url_list", None)
+
     print(f"\nSlacker")
     print(f"  Topic: {args.topic}")
-    print(f"  Channels: {len(args.url_list)} URL(s)")
+    if slack_token:
+        label = f"{len(channel_names)} channel(s)" if channel_names else "all channels"
+        print(f"  Channels: {label} (via API)")
+    else:
+        print(f"  Channels: {len(url_list)} URL(s)")
     print(f"  Output: {args.output} ({args.format})")
     print(f"  AI Provider: {provider.name}")
     print()
 
     result = run_extraction(
         topic=args.topic,
-        urls=args.url_list,
+        urls=url_list,
         provider=provider,
         output_dir=args.output,
         fmt=args.format,
         cache_dir=args.cache_dir,
-        session_dir=args.session_dir,
+        session_dir=getattr(args, "session_dir", ".slack-session"),
         scroll_delay=args.scroll_delay,
         no_cache=args.no_cache,
+        slack_api_token=slack_token,
+        channel_names=channel_names,
     )
 
     print(f"\n  {result['article_count']} article(s) generated")

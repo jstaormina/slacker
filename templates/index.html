@@ -293,6 +293,9 @@
 <header>
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
   <h1>Slacker</h1>
+  {% if slack_mode == "api" %}
+  <span style="background:rgba(255,255,255,0.2);padding:0.15rem 0.5rem;border-radius:10px;font-size:0.75rem;font-weight:600;letter-spacing:0.03em">API</span>
+  {% endif %}
   <span>Extract knowledge from Slack conversations</span>
 </header>
 
@@ -311,7 +314,7 @@
         {% endif %}
       </div>
       <div>
-        <strong>Slack Session</strong><br>
+        <strong>{{ "Slack API" if slack_mode == "api" else "Slack Session" }}</strong><br>
         {% if slack_ok %}
           <span style="color:var(--green)">{{ slack_msg }}</span>
         {% else %}
@@ -332,8 +335,13 @@
         </div>
 
         <div class="form-row">
+          {% if slack_mode == "api" %}
+          <label>Channels <span class="hint">(comma-separated names, leave empty for all)</span></label>
+          <textarea name="urls" placeholder="e.g. general, engineering, incidents"></textarea>
+          {% else %}
           <label>Channel URLs <span class="hint">(comma-separated)</span></label>
           <textarea name="urls" required placeholder="https://app.slack.com/client/TGG6BJ82E/CGG6BJN5Q, https://app.slack.com/client/TGG6BJ82E/CABC123"></textarea>
+          {% endif %}
         </div>
 
         <div class="form-row">

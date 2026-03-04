@@ -132,7 +132,21 @@ def parse_args(argv=None):
         description="Extract knowledge from Slack conversations and generate organized KB articles.",
     )
 
-    # Slack session (Playwright-based)
+    # Slack authentication
+    parser.add_argument(
+        "--slack-api-token",
+        default=os.environ.get("SLACK_API_TOKEN"),
+        help="Slack API token (bot or user). If set, uses API instead of browser scraping. "
+             "Also reads SLACK_API_TOKEN env var.",
+    )
+    parser.add_argument(
+        "--channels",
+        default=None,
+        help="Comma-separated channel names to search (API mode only). "
+             "If omitted, searches all accessible channels.",
+    )
+
+    # Slack session (Playwright-based, used when no API token)
     parser.add_argument(
         "--login",
         action="store_true",
@@ -250,15 +264,25 @@ def parse_args(argv=None):
             parser.error("--workspace is required with --login")
         return args
 
-    # Search mode requires --urls and --topic
-    if not args.urls:
-        parser.error("--urls is required (or use --login to set up your session first)")
+    # Search mode requires --topic
     if not args.topic:
         parser.error("--topic is required")
 
-    args.url_list = [u.strip() for u in args.urls.split(",") if u.strip()]
-    if not args.url_list:
-        parser.error("At least one channel URL is required")
+    # API mode: channels are optional (defaults to all)
+    if args.slack_api_token:
+        args.url_list = None
+        args.channel_list = (
+            [c.strip().lstrip("#") for c in args.channels.split(",") if c.strip()]
+            if args.channels else None
+        )
+    else:
+        # Playwright mode: URLs are required
+        if not args.urls:
+            parser.error("--urls is required (or use --slack-api-token / --login)")
+        args.url_list = [u.strip() for u in args.urls.split(",") if u.strip()]
+        if not args.url_list:
+            parser.error("At least one channel URL is required")
+        args.channel_list = None
 
     return args
 

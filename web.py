@@ -31,6 +31,9 @@ DEFAULT_OUTPUT_DIR = os.environ.get("KB_OUTPUT_DIR", "kb")
 # AI provider configured via env vars
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "cli")  # cli, api, openai, lmstudio, ollama
 
+# Slack API token (if set, uses API instead of Playwright browser session)
+SLACK_API_TOKEN = os.environ.get("SLACK_API_TOKEN", "")
+
 # ---------------------------------------------------------------------------
 # Job management
 # ---------------------------------------------------------------------------
@@ -104,6 +107,25 @@ def _check_slack_session() -> tuple[bool, str]:
     if not os.path.exists(os.path.join(session_dir, "Default")):
         return False, f"Slack session at {session_dir} appears empty. Run login first."
     return True, "Slack session found."
+
+
+def _check_slack_auth() -> tuple[bool, str, str]:
+    """Check Slack connectivity. Returns (ok, message, mode).
+
+    mode is 'api' when SLACK_API_TOKEN is set, 'session' otherwise.
+    """
+    if SLACK_API_TOKEN:
+        try:
+            from slack_api import create_client, test_auth
+            client = create_client(SLACK_API_TOKEN)
+            info = test_auth(client)
+            team = info.get("team", "unknown workspace")
+            return True, f"API connected ({team})", "api"
+        except Exception as e:
+            return False, f"Slack API error: {e}", "api"
+    else:
+        ok, msg = _check_slack_session()
+        return ok, msg, "session"
 
 
 def _check_provider() -> tuple[bool, str]:
@@ -202,15 +224,27 @@ def run_pipeline(job: Job):
         provider = build_provider()
         job.log(f"Using AI provider: {provider.name}")
 
-        urls = [u.strip() for u in config["urls"].split(",") if u.strip()]
-        if not urls:
-            job.fail("No channel URLs provided")
-            return
+        use_api = bool(SLACK_API_TOKEN)
+        raw_input = config.get("urls", "").strip()
 
-        # Check Slack session before scraping
-        ok, msg = _check_slack_session()
-        if not ok:
-            job.log(f"Warning: {msg}")
+        if use_api:
+            # In API mode, input field contains channel names (optional)
+            channel_names = [n.strip().lstrip("#") for n in raw_input.split(",") if n.strip()] if raw_input else None
+            urls = None
+            if channel_names:
+                job.log(f"Searching channels: {', '.join(channel_names)}")
+            else:
+                job.log("Searching all accessible channels")
+        else:
+            urls = [u.strip() for u in raw_input.split(",") if u.strip()]
+            channel_names = None
+            if not urls:
+                job.fail("No channel URLs provided")
+                return
+
+            ok, msg = _check_slack_session()
+            if not ok:
+                job.log(f"Warning: {msg}")
 
         result = run_extraction(
             topic=config["topic"],
@@ -222,6 +256,8 @@ def run_pipeline(job: Job):
             session_dir=config.get("session_dir") or DEFAULT_SESSION_DIR,
             scroll_delay=float(config.get("scroll_delay", 3.0)),
             no_cache=config.get("no_cache", False),
+            slack_api_token=SLACK_API_TOKEN or None,
+            channel_names=channel_names,
             log=job.log,
         )
 
@@ -237,13 +273,14 @@ def run_pipeline(job: Job):
 @app.route("/")
 def index():
     provider_ok, provider_msg = _check_provider()
-    slack_ok, slack_msg = _check_slack_session()
+    slack_ok, slack_msg, slack_mode = _check_slack_auth()
     return render_template(
         "index.html",
         provider_ok=provider_ok,
         provider_msg=provider_msg,
         slack_ok=slack_ok,
         slack_msg=slack_msg,
+        slack_mode=slack_mode,
     )
 
 
@@ -257,8 +294,10 @@ def healthz():
 def start_run():
     """Start a new extraction pipeline job."""
     config = request.json
-    if not config.get("topic") or not config.get("urls"):
-        return jsonify({"error": "Topic and URLs are required"}), 400
+    if not config.get("topic"):
+        return jsonify({"error": "Topic is required"}), 400
+    if not SLACK_API_TOKEN and not config.get("urls"):
+        return jsonify({"error": "Channel URLs are required"}), 400
 
     job_id = str(uuid.uuid4())[:8]
     job = Job(job_id, config)
